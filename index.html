@@ -1,0 +1,337 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Lightning Detector v2.0{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1><i class="fas fa-bolt lightning-icon"></i> Lightning Detector Hardened v2.0</h1>
+        <p class="text-muted">Real-time lightning detection with a reliable, event-driven architecture</p>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="alert-zone warning-zone p-3 rounded {{ 'active' if alert_state.warning_active else '' }}">
+            <h5><i class="fas fa-exclamation-triangle text-warning"></i> Warning Zone (≤{{ config.get('ALERTS', 'warning_distance', fallback='30') }}km)</h5>
+            <div class="d-flex justify-content-between align-items-center">
+                <span class="alert-status-badge">
+                    {% if alert_state.warning_active %}
+                        <span class="badge bg-warning text-dark">ACTIVE</span>
+                    {% else %}
+                        <span class="badge bg-secondary">Monitoring</span>
+                    {% endif %}
+                </span>
+                {% if alert_state.last_warning_strike %}
+                    <small class="text-muted">Last strike: {{ alert_state.last_warning_strike }}</small>
+                {% else %}
+                    <small class="text-muted">No recent activity</small>
+                {% endif %}
+            </div>
+            {% if alert_state.warning_active %}
+                <div class="mt-2">
+                    <small class="text-warning">
+                        <i class="fas fa-clock"></i> All-clear timer active
+                    </small>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="alert-zone critical-zone p-3 rounded {{ 'active' if alert_state.critical_active else '' }}">
+            <h5><i class="fas fa-exclamation-circle text-danger"></i> Critical Zone (≤{{ config.get('ALERTS', 'critical_distance', fallback='10') }}km)</h5>
+            <div class="d-flex justify-content-between align-items-center">
+                <span class="alert-status-badge">
+                    {% if alert_state.critical_active %}
+                        <span class="badge badge-critical">CRITICAL</span>
+                    {% else %}
+                        <span class="badge bg-secondary">Safe</span>
+                    {% endif %}
+                </span>
+                {% if alert_state.last_critical_strike %}
+                    <small class="text-muted">Last strike: {{ alert_state.last_critical_strike }}</small>
+                {% else %}
+                    <small class="text-muted">No recent activity</small>
+                {% endif %}
+            </div>
+            {% if alert_state.critical_active %}
+                <div class="mt-2">
+                    <small class="text-danger">
+                        <i class="fas fa-shield-alt"></i> Take shelter immediately
+                    </small>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-8">
+        <div class="status-card">
+            <h5><i class="fas fa-heartbeat"></i> System Status</h5>
+            <div class="row">
+                <div class="col-md-6">
+                    <p class="mb-2"><strong>Sensor:</strong>
+                        {% if sensor_status.sensor_active %}
+                            <span class="sensor-active"><i class="fas fa-check-circle"></i> Active</span>
+                        {% else %}
+                            <span class="sensor-inactive"><i class="fas fa-times-circle"></i> Inactive</span>
+                        {% endif %}
+                    </p>
+                    <p class="mb-2"><strong>Operating Mode:</strong>
+                        {% if sensor_status.indoor_mode %}
+                            <span class="text-info"><i class="fas fa-home"></i> Indoor</span>
+                        {% else %}
+                            <span class="text-success"><i class="fas fa-mountain"></i> Outdoor</span>
+                        {% endif %}
+                    </p>
+                     <p class="mb-0"><strong>Last Reading:</strong>
+                        {% if sensor_status.last_reading %}
+                            <span data-last-reading>{{ sensor_status.last_reading }}</span>
+                        {% else %}
+                            <span class="text-muted">Never</span>
+                        {% endif %}
+                    </p>
+                </div>
+                <div class="col-md-6">
+                    <p class="mb-2"><strong>Status Message:</strong>
+                        <span class="text-info">{{ sensor_status.status_message }}</span>
+                    </p>
+                    <p class="mb-2"><strong>Noise Mitigation:</strong>
+                        {% if sensor_status.noise_mode == 'Normal' %}
+                            <span class="text-success">{{ sensor_status.noise_mode }}</span>
+                        {% elif sensor_status.noise_mode == 'High' %}
+                            <span class="text-warning">{{ sensor_status.noise_mode }}</span>
+                        {% else %}
+                            <span class="text-danger fw-bold">{{ sensor_status.noise_mode }}</span>
+                        {% endif %}
+                    </p>
+                    <p class="mb-0"><strong>Events Detected:</strong>
+                        <span class="badge bg-info" data-event-count>{{ lightning_events|length }}</span>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="status-card">
+            <h5><i class="fas fa-cog"></i> Quick Actions</h5>
+            <div class="d-grid gap-2">
+                <a href="{{ url_for('start_monitoring_route') }}" class="btn btn-success btn-sm btn-enhanced">
+                    <i class="fas fa-play"></i> Start Monitoring
+                </a>
+                <a href="{{ url_for('stop_monitoring_route') }}" class="btn btn-warning btn-sm btn-enhanced">
+                    <i class="fas fa-stop"></i> Stop Monitoring
+                </a>
+
+                {% if debug_mode %}
+                <div class="dropdown">
+                    <button class="btn btn-outline-primary btn-sm btn-enhanced dropdown-toggle w-100" type="button" data-bs-toggle="dropdown">
+                        <i class="fas fa-flask"></i> Test Alerts
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-dark w-100">
+                        <li><a class="dropdown-item" href="{{ url_for('test_alerts', type='warning') }}">
+                            <i class="fas fa-exclamation-triangle text-warning"></i> Test Warning Alert
+                        </a></li>
+                        <li><a class="dropdown-item" href="{{ url_for('test_alerts', type='critical') }}">
+                            <i class="fas fa-exclamation-circle text-danger"></i> Test Critical Alert
+                        </a></li>
+                    </ul>
+                </div>
+                {% endif %}
+
+                <a href="{{ url_for('reset_alerts') }}" class="btn btn-outline-secondary btn-sm btn-enhanced">
+                    <i class="fas fa-undo"></i> Reset Alerts
+                </a>
+
+                <button onclick="refreshStatus()" class="btn btn-outline-info btn-sm btn-enhanced">
+                    <i class="fas fa-sync-alt"></i> Refresh Data
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="status-card">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5><i class="fas fa-bolt"></i> Recent Lightning Events</h5>
+                <button onclick="refreshStatus()" class="btn btn-outline-primary btn-sm btn-enhanced">
+                    <i class="fas fa-sync-alt"></i> Refresh
+                </button>
+            </div>
+
+            {% if lightning_events %}
+                <div class="table-responsive">
+                    <table class="table table-dark table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th><i class="fas fa-clock"></i> Time</th>
+                                <th><i class="fas fa-map-marker-alt"></i> Distance</th>
+                                <th><i class="fas fa-bolt"></i> Energy</th>
+                                <th><i class="fas fa-bell"></i> Alert Level</th>
+                                <th><i class="fas fa-paper-plane"></i> Alert Sent</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for event in lightning_events[-15:] | reverse %}
+                            <tr class="lightning-event
+                                {% if event.alert_level == 'critical' %}border-danger
+                                {% elif event.alert_level == 'warning' %}border-warning
+                                {% endif %}">
+                                <td><small>{{ event.timestamp }}</small></td>
+                                <td>
+                                    <span class="badge
+                                        {% if event.distance <= 10 %}bg-danger
+                                        {% elif event.distance <= 30 %}bg-warning text-dark
+                                        {% else %}bg-secondary
+                                        {% endif %}">
+                                        {{ event.distance }} km
+                                    </span>
+                                </td>
+                                <td><small class="font-monospace">{{ "{:,}".format(event.energy) }}</small></td>
+                                <td>
+                                    {% if event.alert_level == 'critical' %}
+                                        <span class="badge badge-critical"><i class="fas fa-exclamation-circle"></i> CRITICAL</span>
+                                    {% elif event.alert_level == 'warning' %}
+                                        <span class="badge badge-warning"><i class="fas fa-exclamation-triangle"></i> WARNING</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary"><i class="fas fa-info-circle"></i> INFO</span>
+                                    {% endif %}
+                                </td>
+                                <td class="text-center">
+                                    {% if event.alert_sent %}
+                                        <i class="fas fa-check text-success" title="Alert sent successfully"></i>
+                                    {% else %}
+                                        <i class="fas fa-times text-muted" title="No alert sent for this event"></i>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+
+                {% if lightning_events|length > 15 %}
+                <div class="text-center mt-3"><small class="text-muted">Showing last 15 events of {{ lightning_events|length }} total</small></div>
+                {% endif %}
+
+            {% else %}
+                <div class="text-center py-5">
+                    <i class="fas fa-cloud text-muted" style="font-size: 4rem; opacity: 0.3;"></i>
+                    <h6 class="mt-3 text-muted">No lightning events detected yet</h6>
+                    <p class="text-muted">The system is actively monitoring for lightning activity...</p>
+                    {% if not sensor_status.sensor_active %}
+                    <div class="mt-3">
+                        <a href="{{ url_for('start_monitoring_route') }}" class="btn btn-primary btn-enhanced">
+                            <i class="fas fa-play"></i> Start Monitoring
+                        </a>
+                    </div>
+                    {% endif %}
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Auto-refresh functionality with enhanced feedback
+    let autoRefreshInterval;
+    let refreshInProgress = false;
+
+    function startAutoRefresh() {
+        autoRefreshInterval = setInterval(function() {
+            if (!refreshInProgress) {
+                // For a full refresh, use window.location.reload(). For partial updates, use fetch().
+                // Given the new states, a full refresh is simpler.
+                window.location.reload(true);
+            }
+        }, 30000); // Refresh every 30 seconds
+    }
+
+    function stopAutoRefresh() {
+        if (autoRefreshInterval) {
+            clearInterval(autoRefreshInterval);
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        // Start auto-refresh
+        startAutoRefresh();
+
+        const lightningEvents = document.querySelectorAll('.lightning-event');
+        lightningEvents.forEach((event, index) => {
+            event.style.opacity = '0';
+            event.style.transform = 'translateY(20px)';
+            setTimeout(() => {
+                event.style.transition = 'all 0.3s ease';
+                event.style.opacity = '1';
+                event.style.transform = 'translateY(0)';
+            }, index * 50);
+        });
+
+        const lightningIcon = document.querySelector('.lightning-icon');
+        if (lightningIcon) {
+            setInterval(() => {
+                lightningIcon.style.textShadow = '0 0 20px var(--accent-blue), 0 0 40px var(--accent-blue)';
+                lightningIcon.style.color = 'var(--accent-blue)';
+                setTimeout(() => {
+                    lightningIcon.style.textShadow = 'none';
+                    lightningIcon.style.color = '';
+                }, 300);
+            }, 4000);
+        }
+
+        console.log('Hardened Dashboard v2.0 loaded');
+    });
+
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            stopAutoRefresh();
+        } else {
+            startAutoRefresh();
+        }
+    });
+
+    function refreshStatus() {
+        const refreshBtns = document.querySelectorAll('[onclick="refreshStatus()"]');
+
+        refreshBtns.forEach(btn => {
+            const icon = btn.querySelector('i');
+            if (icon) {
+                icon.style.animation = 'spin 1s linear infinite';
+                btn.disabled = true;
+            }
+        });
+        document.body.style.transition = 'opacity 0.3s ease';
+        document.body.style.opacity = '0.8';
+        setTimeout(() => {
+            window.location.reload();
+        }, 500);
+    }
+
+    const style = document.createElement('style');
+    style.textContent = `
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+    `;
+    document.head.appendChild(style);
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'r' && !e.ctrlKey && !e.metaKey) {
+            e.preventDefault();
+            refreshStatus();
+        }
+        if (e.key === 'c' && !e.ctrlKey && !e.metaKey) {
+            e.preventDefault();
+            window.location.href = '{{ url_for("config_page") }}';
+        }
+    });
+</script>
+{% endblock %}
