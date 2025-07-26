@@ -191,7 +191,7 @@
                                         {{ event.distance }} km
                                     </span>
                                 </td>
-                                <td><small class="font-monospace">{{ "{:,}".format(event.energy) }}</small></td>
+                                <td><small class="font-monospace">{{ event.energy_formatted }}</small></td>
                                 <td>
                                     {% if event.alert_level == 'critical' %}
                                         <span class="badge badge-critical"><i class="fas fa-exclamation-circle"></i> CRITICAL</span>
@@ -296,23 +296,6 @@
             startAutoRefresh();
         }
     });
-
-    function refreshStatus() {
-        const refreshBtns = document.querySelectorAll('[onclick="refreshStatus()"]');
-
-        refreshBtns.forEach(btn => {
-            const icon = btn.querySelector('i');
-            if (icon) {
-                icon.style.animation = 'spin 1s linear infinite';
-                btn.disabled = true;
-            }
-        });
-        document.body.style.transition = 'opacity 0.3s ease';
-        document.body.style.opacity = '0.8';
-        setTimeout(() => {
-            window.location.reload();
-        }, 500);
-    }
 
     const style = document.createElement('style');
     style.textContent = `

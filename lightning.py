@@ -178,10 +178,13 @@ class AS3935LightningDetector:
             if self.spi:
                 self.spi.close()
                 self.spi = None
-            if self.is_initialized:
+            if self.is_initialized and self.irq_pin is not None:
                 try:
-                    GPIO.cleanup(self.irq_pin)
-                except Exception: pass
+                    # Only cleanup the specific pin we're using
+                    GPIO.remove_event_detect(self.irq_pin)
+                    GPIO.setup(self.irq_pin, GPIO.IN)  # Reset to input
+                except Exception as e:
+                    app.logger.debug(f"GPIO cleanup for pin {self.irq_pin}: {e}")
             app.logger.info(f"Cleaned up GPIO pin {self.irq_pin} and SPI resources.")
         except Exception as e:
             app.logger.error(f"Error during hardware cleanup: {e}")
@@ -210,7 +213,12 @@ def get_config_boolean(section, key, fallback):
 def schedule_all_clear_message(alert_level):
     """Schedules an all-clear message. Timer cancellation is thread-safe."""
     delay_minutes = get_config_int('ALERTS', 'all_clear_timer', 15)
+
     def send_all_clear():
+        # Check if monitoring is still active
+        if MONITORING_STATE['stop_event'].is_set():
+            return
+
         with ALERT_STATE["timer_lock"]:
             now = datetime.now()
             if alert_level == AlertLevel.WARNING and ALERT_STATE["warning_active"]:
@@ -223,6 +231,7 @@ def schedule_all_clear_message(alert_level):
                     send_slack_notification(f"🟢 All Clear: No lightning detected within {get_config_int('ALERTS', 'critical_distance', 10)}km for {delay_minutes} minutes.", alert_level=AlertLevel.ALL_CLEAR, previous_level=AlertLevel.CRITICAL)
                     ALERT_STATE["critical_active"] = False
                     ALERT_STATE["critical_timer"] = None
+
     with ALERT_STATE["timer_lock"]:
         if alert_level == AlertLevel.WARNING and ALERT_STATE["warning_timer"]: ALERT_STATE["warning_timer"].cancel()
         elif alert_level == AlertLevel.CRITICAL and ALERT_STATE["critical_timer"]: ALERT_STATE["critical_timer"].cancel()
@@ -359,10 +368,15 @@ def handle_noise_high_event():
 # --- CORE MONITORING LOGIC (v2.0 EVENT-DRIVEN) ---
 def handle_sensor_interrupt(channel):
     """Callback function triggered by the IRQ pin FALLING edge."""
-    time.sleep(0.002) # Datasheet recommends 2ms delay after IRQ to read registers
+    time.sleep(0.002)  # Datasheet recommends 2ms delay after IRQ to read registers
+
+    # Check if we're shutting down first
+    if MONITORING_STATE['stop_event'].is_set():
+        return
 
     with SENSOR_INIT_LOCK:
-        if not sensor or MONITORING_STATE['stop_event'].is_set(): return
+        if not sensor or not hasattr(sensor, 'is_initialized') or not sensor.is_initialized:
+            return
 
         try:
             interrupt_reason = sensor.get_interrupt_reason()
@@ -456,11 +470,28 @@ def index():
         events = list(MONITORING_STATE['events'])
         status = MONITORING_STATE['status'].copy()
     with ALERT_STATE["timer_lock"]:
-        alert_status = {'warning_active': ALERT_STATE["warning_active"], 'critical_active': ALERT_STATE["critical_active"], 'last_warning_strike': ALERT_STATE["last_warning_strike"].strftime('%H:%M:%S') if ALERT_STATE["last_warning_strike"] else None, 'last_critical_strike': ALERT_STATE["last_critical_strike"].strftime('%H:%M:%S') if ALERT_STATE["last_critical_strike"] else None}
+        alert_status = {
+            'warning_active': ALERT_STATE["warning_active"],
+            'critical_active': ALERT_STATE["critical_active"],
+            'last_warning_strike': ALERT_STATE["last_warning_strike"].strftime('%H:%M:%S') if ALERT_STATE["last_warning_strike"] else None,
+            'last_critical_strike': ALERT_STATE["last_critical_strike"].strftime('%H:%M:%S') if ALERT_STATE["last_critical_strike"] else None
+        }
+
+    # FIX: Pre-format event data before sending to the template to prevent Jinja2 errors.
     for event in events:
         event['timestamp'] = datetime.fromisoformat(event['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
-    if status.get('last_reading'): status['last_reading'] = datetime.fromisoformat(status['last_reading']).strftime('%Y-%m-%d %H:%M:%S')
-    return render_template('index.html', lightning_events=events, sensor_status=status, alert_state=alert_status, config=CONFIG, debug_mode=app.debug)
+        # This formats the number with commas (e.g., 100000 -> "100,000") and adds it to the event dict
+        event['energy_formatted'] = f"{event.get('energy', 0):,}"
+
+    if status.get('last_reading'):
+        status['last_reading'] = datetime.fromisoformat(status['last_reading']).strftime('%Y-%m-%d %H:%M:%S')
+
+    return render_template('index.html',
+        lightning_events=events,
+        sensor_status=status,
+        alert_state=alert_status,
+        config=CONFIG,
+        debug_mode=get_config_boolean('SYSTEM', 'debug', False))
 
 @app.route('/api/status')
 def api_status():
@@ -473,7 +504,7 @@ def api_status():
 
 @app.route('/config')
 def config_page():
-    return render_template('config.html', config=CONFIG, debug_mode=app.debug)
+    return render_template('config.html', config=CONFIG, debug_mode=get_config_boolean('SYSTEM', 'debug', False))
 
 @app.route('/save_config', methods=['POST'])
 def save_config_route():
@@ -528,6 +559,59 @@ def reset_alerts():
     flash('All alert states and noise mitigation modes have been reset.', 'success')
     app.logger.info("Alerts and noise modes manually reset via web interface.")
     return redirect(url_for('index'))
+
+@app.route('/test_alerts/<type>')
+def test_alerts(type):
+    """Test alert functionality"""
+    if not get_config_boolean('SYSTEM', 'debug', False):
+        flash('Test alerts only available in debug mode', 'error')
+        return redirect(url_for('index'))
+
+    if type == 'warning':
+        # Simulate a warning alert
+        test_event = {
+            'timestamp': datetime.now().isoformat(),
+            'distance': 25,
+            'energy': 150000,
+            'alert_sent': True,
+            'alert_level': 'warning'
+        }
+        with MONITORING_STATE['lock']:
+            MONITORING_STATE['events'].append(test_event)
+        send_slack_notification(
+            "⚠️ TEST WARNING: Lightning detected. Distance: 25km",
+            25, 150000, AlertLevel.WARNING
+        )
+        flash('Test warning alert sent', 'success')
+
+    elif type == 'critical':
+        # Simulate a critical alert
+        test_event = {
+            'timestamp': datetime.now().isoformat(),
+            'distance': 8,
+            'energy': 250000,
+            'alert_sent': True,
+            'alert_level': 'critical'
+        }
+        with MONITORING_STATE['lock']:
+            MONITORING_STATE['events'].append(test_event)
+        send_slack_notification(
+            "🚨 TEST CRITICAL: Lightning strike detected! Distance: 8km",
+            8, 250000, AlertLevel.CRITICAL
+        )
+        flash('Test critical alert sent', 'success')
+
+    return redirect(url_for('index'))
+
+@app.route('/test_slack')
+def test_slack():
+    """Test Slack connection"""
+    try:
+        send_slack_notification("🧪 Test message from Lightning Detector v2.0")
+        flash('Test message sent to Slack successfully', 'success')
+    except Exception as e:
+        flash(f'Failed to send test message: {str(e)}', 'error')
+    return redirect(url_for('config_page'))
 
 # --- MAIN EXECUTION ---
 def load_and_configure():

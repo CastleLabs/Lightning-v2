@@ -115,10 +115,74 @@
 
             <div class="config-section">
                 <h5><i class="fas fa-bell"></i> Alert Settings</h5>
+                <p class="text-muted small">Configure alert thresholds and timings.</p>
+
+                <div class="row">
+                    <div class="col-md-4">
+                        <div class="mb-3">
+                            <label class="form-label">Critical Distance (km)</label>
+                            <input type="number" class="form-control" name="ALERTS_critical_distance"
+                                   value="{{ config.get('ALERTS', 'critical_distance', fallback='10') }}" min="1" max="50">
+                            <div class="form-text">Strikes within this distance trigger critical alerts</div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="mb-3">
+                            <label class="form-label">Warning Distance (km)</label>
+                            <input type="number" class="form-control" name="ALERTS_warning_distance"
+                                   value="{{ config.get('ALERTS', 'warning_distance', fallback='30') }}" min="1" max="100">
+                            <div class="form-text">Strikes within this distance trigger warnings</div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="mb-3">
+                            <label class="form-label">All Clear Timer (min)</label>
+                            <input type="number" class="form-control" name="ALERTS_all_clear_timer"
+                                   value="{{ config.get('ALERTS', 'all_clear_timer', fallback='15') }}" min="5" max="60">
+                            <div class="form-text">Time before sending all-clear message</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Energy Threshold</label>
+                    <input type="number" class="form-control" name="ALERTS_energy_threshold"
+                           value="{{ config.get('ALERTS', 'energy_threshold', fallback='100000') }}" min="0">
+                    <div class="form-text">Minimum energy level to trigger alerts</div>
+                </div>
                 </div>
 
             <div class="config-section">
                 <h5><i class="fas fa-file-alt"></i> Logging Settings</h5>
+                <p class="text-muted small">Configure application logging.</p>
+
+                <div class="row">
+                    <div class="col-md-4">
+                        <div class="mb-3">
+                            <label class="form-label">Log Level</label>
+                            <select class="form-select" name="LOGGING_level">
+                                <option value="DEBUG" {{ 'selected' if config.get('LOGGING', 'level', fallback='INFO') == 'DEBUG' else '' }}>DEBUG</option>
+                                <option value="INFO" {{ 'selected' if config.get('LOGGING', 'level', fallback='INFO') == 'INFO' else '' }}>INFO</option>
+                                <option value="WARNING" {{ 'selected' if config.get('LOGGING', 'level', fallback='INFO') == 'WARNING' else '' }}>WARNING</option>
+                                <option value="ERROR" {{ 'selected' if config.get('LOGGING', 'level', fallback='INFO') == 'ERROR' else '' }}>ERROR</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="mb-3">
+                            <label class="form-label">Max File Size (MB)</label>
+                            <input type="number" class="form-control" name="LOGGING_max_file_size"
+                                   value="{{ config.get('LOGGING', 'max_file_size', fallback='10') }}" min="1" max="100">
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="mb-3">
+                            <label class="form-label">Backup Count</label>
+                            <input type="number" class="form-control" name="LOGGING_backup_count"
+                                   value="{{ config.get('LOGGING', 'backup_count', fallback='5') }}" min="1" max="20">
+                        </div>
+                    </div>
+                </div>
                 </div>
 
             <div class="d-grid gap-2 d-md-flex justify-content-md-end">
