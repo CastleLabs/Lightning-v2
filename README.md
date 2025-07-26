@@ -1,29 +1,33 @@
 # Lightning Detector v2.0
 ## Event-Driven & Hardened Architecture
 
-A robust, real-time lightning detection system built for Raspberry Pi using the CJMCU-3935 (AS3935) sensor module. This system provides web-based monitoring, Slack alerts, and implements an event-driven architecture for maximum reliability.
-
-![Lightning Detector](https://img.shields.io/badge/version-2.0-blue.svg)
-![Python](https://img.shields.io/badge/python-3.7+-green.svg)
-![Raspberry Pi](https://img.shields.io/badge/platform-Raspberry%20Pi-red.svg)
+A robust, real-time lightning detection system built for Raspberry Pi using the CJMCU-3935 (AS3935) sensor module. This system provides a web-based monitoring dashboard, Slack alerts, and implements a hardened, event-driven architecture for maximum reliability and efficiency.
 
 ## 🌩️ Features
 
 ### Core Functionality
-- **Real-time Lightning Detection**: Detects lightning strikes up to 40km away
-- **Event-Driven Architecture**: Interrupt-based detection for immediate response
-- **Web Dashboard**: Modern, responsive interface with live updates
-- **Slack Integration**: Instant notifications for critical weather events
-- **Multi-Zone Alerts**: Warning (≤30km) and Critical (≤10km) zones
-- **All-Clear Notifications**: Automatic notifications when storms pass
+
+**Real-time Lightning Detection**: Uses an interrupt-driven approach to immediately detect lightning strikes and atmospheric disturbers.
+
+**Multi-Zone Alerts**: Issues distinct WARNING and CRITICAL alerts based on configurable distance thresholds. The default warning distance is 30km and the critical distance is 10km.
+
+**Web Dashboard**: A modern, responsive interface built with Flask and Bootstrap to visualize system status, alert states, and recent lightning events.
+
+**Slack Integration**: Delivers rich, formatted notifications for alerts and system status changes directly to a configured Slack channel.
+
+**All-Clear Notifications**: Automatically sends an "All Clear" message after a configurable period of inactivity in an alert zone.
 
 ### Advanced Features
-- **Dynamic Noise Handling**: Automatically adjusts to environmental interference
-- **Indoor/Outdoor Modes**: Optimized detection for different environments
-- **Configurable Sensitivity**: Low, medium, or high detection sensitivity
-- **Energy Threshold Filtering**: Eliminates false positives from weak signals
-- **Comprehensive Logging**: Rotating log files with configurable levels
-- **RESTful API**: JSON endpoints for integration with other systems
+
+**Dynamic Noise Handling**: The system can differentiate between transient "disturbers" and persistent noise, automatically raising the sensor's noise floor to prevent false alarms and reverting after a quiet period.
+
+**Indoor/Outdoor Modes**: A specific indoor mode adjusts the sensor's Analog Front-End (AFE) gain to reject common man-made, indoor noise sources.
+
+**Configurable Sensitivity & Energy Filtering**: Allows tuning the sensor's detection sensitivity and setting a minimum energy threshold for a strike to trigger an alert.
+
+**Comprehensive Logging**: Utilizes Python's RotatingFileHandler to create log files with configurable levels, sizes, and backup counts to prevent disk space issues.
+
+**RESTful API**: Provides a JSON endpoint for at-a-glance system status, suitable for integration with other monitoring tools.
 
 ## 📋 Requirements
 
@@ -31,274 +35,191 @@ A robust, real-time lightning detection system built for Raspberry Pi using the 
 - Raspberry Pi (any model with GPIO pins)
 - CJMCU-3935 Lightning Detector Module (AS3935 chip)
 - Jumper wires for connections
-- (Optional) Case or enclosure for outdoor deployment
 
 ### Software
-- Raspberry Pi OS (Raspbian)
-- Python 3.7 or higher
-- SPI interface enabled
+- Raspberry Pi OS (or other compatible Linux distribution)
+- Python 3.7+
+- Enabled SPI interface on the Raspberry Pi
+- Python libraries: Flask, RPi.GPIO, spidev, requests
 - Internet connection (for Slack notifications)
 
 ## 🔧 Hardware Setup
 
 ### Wiring Diagram
-Connect the CJMCU-3935 module to your Raspberry Pi:
 
-| CJMCU-3935 Pin | Raspberry Pi Pin | Description |
-|----------------|------------------|-------------|
-| VCC | Pin 1 (3.3V) | Power supply |
-| GND | Pin 6 (GND) | Ground |
-| MISO | Pin 21 (SPI MISO) | Master In Slave Out |
-| MOSI | Pin 19 (SPI MOSI) | Master Out Slave In |
-| SCLK | Pin 23 (SPI CLK) | Serial Clock |
-| CS | Pin 24 (SPI CE0) | Chip Select |
-| IRQ | Pin 3 (GPIO 2) | Interrupt Request |
+Connect the CJMCU-3935 module to your Raspberry Pi's GPIO header. The default configuration uses the following BCM pins:
+
+| CJMCU-3935 Pin | RPi Pin (BCM) | RPi Pin (Physical) | Description |
+|----------------|---------------|-------------------|-------------|
+| VCC | 3.3V Power | Pin 1 or 17 | Power Supply |
+| GND | Ground | Pin 6, 9, etc. | Ground |
+| MISO | GPIO 9 | Pin 21 | Master In Slave Out |
+| MOSI | GPIO 10 | Pin 19 | Master Out Slave In |
+| SCLK | GPIO 11 | Pin 23 | Serial Clock |
+| CS | GPIO 8 | Pin 24 | SPI Chip Select (CE0) |
+| IRQ | GPIO 2 | Pin 3 | Interrupt Request |
 
 ## 🚀 Installation
 
 ### Automated Setup
 
-1. Clone the repository:
-```bash
-git clone https://github.com/yourusername/lightning-detector.git
-cd lightning-detector
-```
+The provided setup script automates the entire installation process.
 
-2. Run the setup script:
+1. Download the project files to your Raspberry Pi.
+
+2. Make the setup script executable and run it:
+
 ```bash
 chmod +x setup.sh
 ./setup.sh
 ```
 
-The setup script will:
-- Update system packages
-- Install Python dependencies
-- Enable SPI interface
-- Configure GPIO permissions
-- Create virtual environment
-- Generate initial configuration
-- (Optional) Set up systemd service
+The script will perform the following actions:
+- Update system packages.
+- Install Python dependencies via pip.
+- Enable the SPI interface using raspi-config.
+- Add your user to the gpio and spi groups.
+- Create a Python virtual environment.
+- Generate the initial config.ini file.
+- Optionally create and enable a systemd service for auto-starting on boot.
 
-3. **Important**: Reboot your Raspberry Pi after setup:
-```bash
-sudo reboot
-```
+**Important**: Reboot your Raspberry Pi for all permission changes to take effect:
 
-### Manual Setup
-
-If you prefer manual installation:
-
-1. Enable SPI:
-```bash
-sudo raspi-config nonint do_spi 0
-```
-
-2. Install dependencies:
-```bash
-sudo apt-get update
-sudo apt-get install -y python3 python3-pip python3-venv git
-```
-
-3. Create virtual environment:
-```bash
-python3 -m venv lightning_detector_env
-source lightning_detector_env/bin/activate
-pip install -r requirements.txt
-```
-
-4. Add user to GPIO groups:
-```bash
-sudo usermod -a -G gpio,spi $USER
-```
-
-5. Reboot to apply changes:
 ```bash
 sudo reboot
 ```
 
 ## ⚙️ Configuration
 
-Edit `config.ini` to customize your setup:
+After installation, edit the config.ini file to customize your setup. Key settings are listed below.
 
 ### Essential Settings
 
 ```ini
 [SENSOR]
-# Set to true if sensor is indoors
+# Set to true if sensor is indoors to reject man-made noise.
 indoor = false
 
-# Detection sensitivity: low, medium, or high
+# Detection sensitivity: low, medium, or high.
 sensitivity = medium
 
 [SLACK]
 # Get token from https://api.slack.com/apps
 bot_token = xoxb-YOUR-BOT-TOKEN-HERE
-channel = #weather-alerts
+
+# Channel name or user ID to send messages to.
+channel = #alerts
+
+# Master switch for all Slack notifications.
 enabled = true
 
 [ALERTS]
-# Distance thresholds in kilometers
+# Distance thresholds in kilometers.
 critical_distance = 10
 warning_distance = 30
 ```
 
-### Slack Setup
+### Slack Bot Setup
 
-1. Create a Slack App at https://api.slack.com/apps
-2. Add OAuth Scopes: `chat:write`, `chat:write.public`
-3. Install to workspace and copy the Bot User OAuth Token
-4. Add the bot to your desired channel
+1. Create a new Slack App at https://api.slack.com/apps.
+2. Navigate to "OAuth & Permissions" and add the chat:write scope.
+3. Install the app to your workspace and copy the "Bot User OAuth Token" (starts with xoxb-).
+4. Paste the token into the bot_token field in config.ini.
+5. Invite the bot to the channel you specified in config.ini.
 
 ## 🎯 Usage
 
 ### Starting the Application
 
 #### Method 1: Direct Launch
+Use the provided startup script. This will activate the virtual environment and run the Python script.
+
 ```bash
 ./start.sh
 ```
 
 #### Method 2: Systemd Service
+If you enabled the service during setup, you can manage it with systemctl.
+
 ```bash
+# Start the service
 sudo systemctl start lightning-detector
-sudo systemctl enable lightning-detector  # Auto-start on boot
+
+# Enable the service to auto-start on boot
+sudo systemctl enable lightning-detector
+
+# Check the service status and logs
+sudo systemctl status lightning-detector
+journalctl -u lightning-detector -f
 ```
 
 ### Accessing the Web Interface
 
-Open your browser and navigate to:
+Open your browser and navigate to your Raspberry Pi's IP address on port 5000:
 ```
-http://YOUR_RASPBERRY_PI_IP:5000
+http://<YOUR_RASPBERRY_PI_IP>:5000
 ```
 
-### Web Interface Features
+#### Web Interface Features
 
-#### Dashboard (Home Page)
-- **Alert Status**: Visual indicators for Warning and Critical zones
-- **System Status**: Sensor health, operating mode, and noise levels
-- **Recent Events**: Table of detected lightning strikes with distance and energy
-- **Quick Actions**: Start/stop monitoring, test alerts, refresh data
+**Dashboard (/)**: Displays the active state of the Warning and Critical alert zones, shows sensor status including operating mode and noise levels, lists the 15 most recent lightning events, and provides quick action buttons to manage the detector.
 
-#### Configuration Page
-- Modify all settings without editing files
-- Test Slack connection
-- Save changes (requires restart)
+**Configuration (/config)**: A web form that allows you to view and edit all settings from config.ini directly, test the Slack connection, and save your changes (a restart is required for changes to apply).
 
-### API Endpoints
+### API and Routes
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/status` | GET | System status and current readings |
-| `/api/events` | GET | Recent lightning events (JSON) |
-| `/start_monitoring` | GET | Start the monitoring service |
-| `/stop_monitoring` | GET | Stop the monitoring service |
-| `/reset_alerts` | GET | Clear all active alerts |
+| /api/status | GET | Returns a JSON object with the current system status, including sensor activity, alert states, and monitoring thread status. |
+| /start_monitoring | GET | Starts the monitoring thread. |
+| /stop_monitoring | GET | Stops the monitoring thread and cancels all active timers. |
+| /reset_alerts | GET | Resets all active alert states and noise mitigation modes to their defaults. |
+| /test_alerts/<type> | GET | In debug mode, triggers a test warning or critical alert. |
+| /test_slack | GET | Sends a test message to the configured Slack channel. |
 
 ## 🛡️ Advanced Features
 
 ### Dynamic Noise Handling
 
-The system automatically adjusts to environmental interference:
+The system intelligently adapts to environmental interference using logic from lightning.py.
 
-1. **Transient Disturbers**: Counted over time window
-   - If threshold exceeded → Elevates to "High" noise mode
-   - Automatically reverts after quiet period
+**Transient Disturbers (INT_D)**: The system counts these events over a time window (default: 15 events in 120 seconds). If the threshold is exceeded, it temporarily elevates the sensor's noise floor to "High" mode to prevent false alarms.
 
-2. **Persistent Noise**: Immediate response to INT_NH
-   - Sets noise floor to maximum (Critical mode)
-   - Reverts after configured delay
+**Persistent Noise (INT_NH)**: An INT_NH interrupt from the sensor indicates the noise floor is saturated. The system immediately sets the noise floor to its maximum "Critical" level.
+
+In both cases, the system will automatically revert to the normal noise floor after a configurable quiet period (default: 10 minutes).
 
 ### Alert Logic
 
-```
-Lightning Detected → Check Distance → Check Energy
-                           ↓
-                    ≤10km: CRITICAL Alert
-                    ≤30km: WARNING Alert
-                    >30km: Log only
-                           ↓
-                    Start All-Clear Timer
-                           ↓
-                    No strikes for 15min → All-Clear Message
-```
+Alerts are triggered based on a combination of distance and energy.
+
+- An event's energy must be above energy_threshold to be considered for an alert.
+- An alert notification is only sent when a zone first becomes active to prevent spam.
+- Each new strike within an active zone resets the all_clear_timer (default: 15 minutes).
+- If the timer completes without being reset, an "All Clear" message is sent for that zone.
 
 ## 🔍 Troubleshooting
 
 ### Common Issues
 
-#### 1. "Sensor initialization failed"
-- Check wiring connections
-- Verify SPI is enabled: `ls /dev/spi*`
-- Ensure proper power supply (3.3V)
+**"Sensor initialization failed"**: Double-check your wiring against the diagram. Ensure the SPI interface is enabled by running `ls /dev/spi*` (you should see spidev0.0 or similar). Verify you are using a stable 3.3V power supply.
 
-#### 2. "Permission denied" errors
-- Re-login or reboot after setup
-- Verify group membership: `groups $USER`
+**"Permission denied" on startup**: This usually means the user is not in the gpio or spi groups. Ensure you have rebooted after running the setup.sh script. You can verify your groups by running the `groups` command.
 
-#### 3. No Slack notifications
-- Check bot token in config.ini
-- Verify bot is in channel
-- Test connection from config page
+**No Slack Notifications**: Use the "Test Slack Connection" button on the configuration page to isolate the issue. Verify your bot_token is correct and that the bot has been invited to the specified channel in Slack.
 
-#### 4. False positives/negatives
-- Adjust sensitivity in config
-- Enable indoor mode if applicable
-- Check for interference sources
+**False Alarms or Missed Strikes**: Adjust the sensitivity setting in the config file. If the sensor is indoors, ensure `indoor = true` is set to help reject electrical interference.
 
-### Debug Mode
+### Viewing Logs
 
-Enable debug logging in `config.ini`:
-```ini
-[SYSTEM]
-debug = true
+The primary log file is `lightning_detector.log`. For a live view of the logs:
 
-[LOGGING]
-level = DEBUG
-```
-
-View logs:
 ```bash
 tail -f lightning_detector.log
 ```
 
-## 📊 Performance
+If running as a systemd service, use journalctl:
 
-- **Response Time**: <2ms from strike to detection
-- **Memory Usage**: ~50MB typical
-- **CPU Usage**: <5% idle, <15% during events
-- **Power Consumption**: ~200mA @ 5V
-
-## 🔒 Security Considerations
-
-- Run the application as a non-root user
-- Use HTTPS for production deployments
-- Secure your Slack bot token
-- Implement firewall rules for remote access
-- Regular security updates: `sudo apt-get update && sudo apt-get upgrade`
-
-## 🤝 Contributing
-
-Contributions are welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Submit a pull request
-
-## 📝 License
-
-This project is licensed under the MIT License - see LICENSE file for details.
-
-## 🙏 Acknowledgments
-
-- AS3935 datasheet and application notes
-- Raspberry Pi Foundation
-- Flask and Python communities
-
-## 📞 Support
-
-- Create an issue on GitHub
-- Check existing issues for solutions
-- Review logs for error messages
-
----
-
-**Note**: This system is for informational purposes only. Do not rely solely on this device for lightning safety. Always follow official weather warnings and safety guidelines.
+```bash
+journalctl -u lightning-detector -f
+```
