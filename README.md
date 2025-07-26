@@ -1,7 +1,7 @@
 # Lightning Detector v2.0
 ## Event-Driven & Hardened Architecture
 
-A robust, real-time lightning detection system built for Raspberry Pi using the CJMCU-3935 (AS3935) sensor module. This system provides a web-based monitoring dashboard, Slack alerts, and implements a hardened, event-driven architecture for maximum reliability and efficiency.
+A real-time lightning detection system built for Raspberry Pi using the CJMCU-3935 (AS3935) sensor module. This system provides a web-based monitoring dashboard, Slack alerts, and implements a hardened, event-driven architecture.
 
 ## 🌩️ Features
 
