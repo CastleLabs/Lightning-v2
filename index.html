@@ -85,11 +85,20 @@
                             <span class="text-success"><i class="fas fa-mountain"></i> Outdoor</span>
                         {% endif %}
                     </p>
-                     <p class="mb-0"><strong>Last Reading:</strong>
+                    <p class="mb-2"><strong>Last Reading:</strong>
                         {% if sensor_status.last_reading %}
                             <span data-last-reading>{{ sensor_status.last_reading }}</span>
                         {% else %}
                             <span class="text-muted">Never</span>
+                        {% endif %}
+                    </p>
+                    <p class="mb-0"><strong>Sensor Health:</strong>
+                        {% if sensor_status.sensor_healthy %}
+                            <span class="text-success"><i class="fas fa-heart"></i> Healthy</span>
+                        {% else %}
+                            <span class="text-danger" title="{{ sensor_status.last_error if sensor_status.last_error else 'Unknown error' }}">
+                                <i class="fas fa-exclamation-triangle"></i> Unhealthy
+                            </span>
                         {% endif %}
                     </p>
                 </div>
@@ -107,10 +116,21 @@
                         {% endif %}
                     </p>
                     <p class="mb-0"><strong>Events Detected:</strong>
-                        <span class="badge bg-info" data-event-count>{{ lightning_events|length }}</span>
+                        <span class="badge bg-info" data-event-count>{{ total_event_count if total_event_count else lightning_events|length }}</span>
+                        {% if events_truncated %}
+                            <small class="text-muted">(showing last 100)</small>
+                        {% endif %}
                     </p>
                 </div>
             </div>
+            {% if sensor_status.last_error %}
+                <div class="mt-3">
+                    <div class="alert alert-warning mb-0">
+                        <i class="fas fa-exclamation-triangle"></i> Last Error:
+                        <code>{{ sensor_status.last_error }}</code>
+                    </div>
+                </div>
+            {% endif %}
         </div>
     </div>
 
@@ -148,6 +168,10 @@
                 <button onclick="refreshStatus()" class="btn btn-outline-info btn-sm btn-enhanced">
                     <i class="fas fa-sync-alt"></i> Refresh Data
                 </button>
+
+                <a href="{{ url_for('health_check') }}" target="_blank" class="btn btn-outline-success btn-sm btn-enhanced">
+                    <i class="fas fa-heartbeat"></i> Health Check
+                </a>
             </div>
         </div>
     </div>
@@ -158,9 +182,12 @@
         <div class="status-card">
             <div class="d-flex justify-content-between align-items-center mb-3">
                 <h5><i class="fas fa-bolt"></i> Recent Lightning Events</h5>
-                <button onclick="refreshStatus()" class="btn btn-outline-primary btn-sm btn-enhanced">
-                    <i class="fas fa-sync-alt"></i> Refresh
-                </button>
+                <div>
+                    <span class="connection-indicator me-3"></span>
+                    <button onclick="refreshStatus()" class="btn btn-outline-primary btn-sm btn-enhanced">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                </div>
             </div>
 
             {% if lightning_events %}
@@ -181,17 +208,17 @@
                                 {% if event.alert_level == 'critical' %}border-danger
                                 {% elif event.alert_level == 'warning' %}border-warning
                                 {% endif %}">
-                                <td><small>{{ event.timestamp }}</small></td>
+                                <td><small>{{ event.timestamp if event.timestamp else 'Unknown' }}</small></td>
                                 <td>
                                     <span class="badge
-                                        {% if event.distance <= 10 %}bg-danger
-                                        {% elif event.distance <= 30 %}bg-warning text-dark
+                                        {% if event.distance and event.distance <= 10 %}bg-danger
+                                        {% elif event.distance and event.distance <= 30 %}bg-warning text-dark
                                         {% else %}bg-secondary
                                         {% endif %}">
-                                        {{ event.distance }} km
+                                        {{ event.distance if event.distance else '?' }} km
                                     </span>
                                 </td>
-                                <td><small class="font-monospace">{{ event.energy_formatted }}</small></td>
+                                <td><small class="font-monospace">{{ event.energy_formatted if event.energy_formatted else '0' }}</small></td>
                                 <td>
                                     {% if event.alert_level == 'critical' %}
                                         <span class="badge badge-critical"><i class="fas fa-exclamation-circle"></i> CRITICAL</span>
@@ -215,7 +242,14 @@
                 </div>
 
                 {% if lightning_events|length > 15 %}
-                <div class="text-center mt-3"><small class="text-muted">Showing last 15 events of {{ lightning_events|length }} total</small></div>
+                <div class="text-center mt-3">
+                    <small class="text-muted">
+                        Showing last 15 events of {{ total_event_count if total_event_count else lightning_events|length }} total
+                        {% if events_truncated %}
+                            (event history limited to 100 entries)
+                        {% endif %}
+                    </small>
+                </div>
                 {% endif %}
 
             {% else %}
@@ -235,6 +269,33 @@
         </div>
     </div>
 </div>
+
+<!-- System Health Status Card -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="status-card">
+            <h5><i class="fas fa-info-circle"></i> System Information</h5>
+            <div class="row">
+                <div class="col-md-3">
+                    <small class="text-muted">Version</small>
+                    <p class="mb-0"><strong>2.0 Enhanced</strong></p>
+                </div>
+                <div class="col-md-3">
+                    <small class="text-muted">Architecture</small>
+                    <p class="mb-0"><strong>Event-Driven</strong></p>
+                </div>
+                <div class="col-md-3">
+                    <small class="text-muted">Uptime</small>
+                    <p class="mb-0"><strong id="uptime">Calculating...</strong></p>
+                </div>
+                <div class="col-md-3">
+                    <small class="text-muted">API Status</small>
+                    <p class="mb-0"><a href="{{ url_for('api_status') }}" target="_blank">View JSON</a></p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -242,13 +303,13 @@
     // Auto-refresh functionality with enhanced feedback
     let autoRefreshInterval;
     let refreshInProgress = false;
+    let pageLoadTime = new Date();
 
     function startAutoRefresh() {
         autoRefreshInterval = setInterval(function() {
             if (!refreshInProgress) {
-                // For a full refresh, use window.location.reload(). For partial updates, use fetch().
-                // Given the new states, a full refresh is simpler.
-                window.location.reload(true);
+                // Check system health before refresh
+                checkSystemHealth();
             }
         }, 30000); // Refresh every 30 seconds
     }
@@ -259,10 +320,84 @@
         }
     }
 
+    function checkSystemHealth() {
+        fetch('/health')
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'healthy' || data.status === 'degraded') {
+                    // System is responsive, perform refresh
+                    window.location.reload(true);
+                } else {
+                    console.warn('System health check failed, skipping refresh');
+                }
+            })
+            .catch(error => {
+                console.error('Health check failed:', error);
+                updateConnectionStatus(false);
+            });
+    }
+
+    function updateConnectionStatus(online = navigator.onLine) {
+        const indicators = document.querySelectorAll('.connection-indicator');
+        indicators.forEach(indicator => {
+            if (online) {
+                indicator.innerHTML = '<i class="fas fa-wifi text-success"></i> Online';
+                indicator.className = 'connection-indicator text-success';
+            } else {
+                indicator.innerHTML = '<i class="fas fa-wifi-slash text-danger"></i> Offline';
+                indicator.className = 'connection-indicator text-danger';
+            }
+        });
+    }
+
+    function updateUptime() {
+        const now = new Date();
+        const diff = now - pageLoadTime;
+        const hours = Math.floor(diff / 3600000);
+        const minutes = Math.floor((diff % 3600000) / 60000);
+        const seconds = Math.floor((diff % 60000) / 1000);
+
+        const uptimeElement = document.getElementById('uptime');
+        if (uptimeElement) {
+            if (hours > 0) {
+                uptimeElement.textContent = `${hours}h ${minutes}m ${seconds}s`;
+            } else if (minutes > 0) {
+                uptimeElement.textContent = `${minutes}m ${seconds}s`;
+            } else {
+                uptimeElement.textContent = `${seconds}s`;
+            }
+        }
+    }
+
+    function refreshStatus() {
+        refreshInProgress = true;
+
+        // Add visual feedback
+        const refreshButtons = document.querySelectorAll('button[onclick="refreshStatus()"]');
+        refreshButtons.forEach(btn => {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Refreshing...';
+        });
+
+        // Perform the refresh with a slight delay for visual feedback
+        setTimeout(() => {
+            window.location.reload(true);
+        }, 300);
+    }
+
     document.addEventListener('DOMContentLoaded', function() {
         // Start auto-refresh
         startAutoRefresh();
 
+        // Update connection status
+        updateConnectionStatus();
+        window.addEventListener('online', () => updateConnectionStatus(true));
+        window.addEventListener('offline', () => updateConnectionStatus(false));
+
+        // Update uptime counter
+        setInterval(updateUptime, 1000);
+
+        // Animate lightning events on load
         const lightningEvents = document.querySelectorAll('.lightning-event');
         lightningEvents.forEach((event, index) => {
             event.style.opacity = '0';
@@ -274,6 +409,7 @@
             }, index * 50);
         });
 
+        // Lightning icon animation
         const lightningIcon = document.querySelector('.lightning-icon');
         if (lightningIcon) {
             setInterval(() => {
@@ -286,34 +422,144 @@
             }, 4000);
         }
 
-        console.log('Hardened Dashboard v2.0 loaded');
+        // Check for sensor health issues
+        const sensorHealthy = {{ 'true' if sensor_status.sensor_healthy else 'false' }};
+        if (!sensorHealthy) {
+            // Show a notification for sensor health issues
+            const notification = document.createElement('div');
+            notification.className = 'alert alert-warning alert-dismissible fade show position-fixed';
+            notification.style.cssText = 'top: 80px; right: 20px; z-index: 1050; max-width: 400px;';
+            notification.innerHTML = `
+                <i class="fas fa-exclamation-triangle"></i>
+                <strong>Sensor Health Warning</strong><br>
+                The sensor is experiencing issues. Check the system status for details.
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            document.body.appendChild(notification);
+
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.remove();
+                }
+            }, 10000);
+        }
+
+        console.log('Hardened Dashboard v2.0 Enhanced loaded');
     });
 
+    // Pause auto-refresh when page is not visible
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             stopAutoRefresh();
         } else {
             startAutoRefresh();
+            // Update uptime when returning to page
+            updateUptime();
         }
     });
 
+    // Add spinning animation style
     const style = document.createElement('style');
     style.textContent = `
         @keyframes spin {
             from { transform: rotate(0deg); }
             to { transform: rotate(360deg); }
         }
+        .fa-spin {
+            animation: spin 1s linear infinite;
+        }
     `;
     document.head.appendChild(style);
 
+    // Keyboard shortcuts
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'r' && !e.ctrlKey && !e.metaKey) {
+        // R key for refresh (without modifiers)
+        if (e.key === 'r' && !e.ctrlKey && !e.metaKey && !e.altKey) {
             e.preventDefault();
             refreshStatus();
         }
-        if (e.key === 'c' && !e.ctrlKey && !e.metaKey) {
+        // C key for config page
+        if (e.key === 'c' && !e.ctrlKey && !e.metaKey && !e.altKey) {
             e.preventDefault();
             window.location.href = '{{ url_for("config_page") }}';
+        }
+        // H key for health check
+        if (e.key === 'h' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault();
+            window.open('{{ url_for("health_check") }}', '_blank');
+        }
+    });
+
+    // Enhanced error recovery
+    window.addEventListener('error', function(e) {
+        console.error('JavaScript error:', e.error);
+
+        // If it's a critical error, stop auto-refresh
+        if (e.error && e.error.message && e.error.message.includes('Cannot read')) {
+            stopAutoRefresh();
+            console.warn('Auto-refresh stopped due to error');
+        }
+    });
+
+    // Add tooltips for sensor health
+    document.querySelectorAll('[title]').forEach(element => {
+        new bootstrap.Tooltip(element);
+    });
+
+    // Monitor for long page load times
+    window.addEventListener('load', function() {
+        const loadTime = performance.timing.loadEventEnd - performance.timing.navigationStart;
+        if (loadTime > 5000) {
+            console.warn(`Slow page load detected: ${loadTime}ms`);
+
+            // Reduce auto-refresh frequency if page is loading slowly
+            stopAutoRefresh();
+            autoRefreshInterval = setInterval(function() {
+                if (!refreshInProgress) {
+                    checkSystemHealth();
+                }
+            }, 60000); // Refresh every minute instead
+        }
+    });
+
+    // Add visual indicator for active alerts
+    function pulseAlerts() {
+        const activeAlerts = document.querySelectorAll('.alert-zone.active');
+        activeAlerts.forEach(alert => {
+            alert.style.animation = 'none';
+            setTimeout(() => {
+                alert.style.animation = '';
+            }, 10);
+        });
+    }
+
+    // Pulse active alerts every 5 seconds
+    setInterval(pulseAlerts, 5000);
+
+    // Show event count in page title if there are recent events
+    const eventCount = {{ total_event_count if total_event_count else 0 }};
+    const criticalActive = {{ 'true' if alert_state.critical_active else 'false' }};
+    const warningActive = {{ 'true' if alert_state.warning_active else 'false' }};
+
+    if (criticalActive) {
+        document.title = '🚨 CRITICAL - Lightning Detector v2.0';
+    } else if (warningActive) {
+        document.title = '⚠️ WARNING - Lightning Detector v2.0';
+    } else if (eventCount > 0) {
+        document.title = `(${eventCount}) Lightning Detector v2.0`;
+    }
+
+    // Save scroll position before refresh
+    window.addEventListener('beforeunload', function() {
+        sessionStorage.setItem('scrollPosition', window.scrollY);
+    });
+
+    // Restore scroll position after refresh
+    window.addEventListener('load', function() {
+        const scrollPosition = sessionStorage.getItem('scrollPosition');
+        if (scrollPosition) {
+            window.scrollTo(0, parseInt(scrollPosition));
+            sessionStorage.removeItem('scrollPosition');
         }
     });
 </script>

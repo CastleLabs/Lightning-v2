@@ -1,11 +1,17 @@
 #!/bin/bash
-# Lightning Detector Hardened Setup Script v2.0
+# Lightning Detector Enhanced Setup Script v2.2-Production
 # Automated installation and configuration for Raspberry Pi
-# Implements a reliable, event-driven architecture.
+# Implements a reliable, event-driven architecture with production enhancements.
 
-set -e  # Exit on any error
+set -e # Exit on any error
 
-# Colors for output
+# --- Script Configuration ---
+PROJECT_DIR=$(pwd)
+VENV_NAME="lightning_detector_env"
+SERVICE_NAME="lightning-detector"
+REBOOT_REQUIRED=false
+
+# --- Colors for output ---
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -14,55 +20,105 @@ PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# Function to print colored output
-print_status() { echo -e "${BLUE}[INFO]${NC} $1"; }
+# --- Helper Functions ---
+print_status() { echo -e "\n${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-print_hardened() { echo -e "${PURPLE}[HARDENED]${NC} $1"; }
+print_hardened() { echo -e "${PURPLE}[ENHANCED]${NC} $1"; }
 
-# Header
+# --- Main Script ---
+clear
 echo -e "${CYAN}"
-echo "🌩️  Lightning Detector Hardened Setup v2.0"
-echo "=============================================="
-echo "Implementing Event-Driven Architecture for Maximum Reliability"
+echo "🌩️  Lightning Detector Enhanced Setup v2.2-Production"
+echo "======================================================="
+echo "This script will install and configure the lightning detector application."
 echo -e "${NC}"
 
-# Check if running as root
+# 1. Pre-flight Checks
+print_status "Running pre-flight checks..."
 if [ "$EUID" -eq 0 ]; then
-    print_error "Please do not run this script as root. Run as a regular user."
+    print_error "This script should not be run as root. Please run as a regular user with sudo privileges."
     exit 1
 fi
 
-# System updates
-print_status "Updating system packages..."
+if ! command -v python3 &>/dev/null; then
+    print_error "Python 3 is not installed. Please install it before running this script."
+    exit 1
+fi
+
+# FIX: Verify critical files exist before starting
+if [ ! -f "lightning.py" ] || [ ! -f "requirements.txt" ]; then
+    print_error "'lightning.py' or 'requirements.txt' not found!"
+    print_error "Please run this script from the root of the lightning detector project directory."
+    exit 1
+fi
+
+# 2. System Preparation
+print_status "Updating system packages (this may take a few minutes)..."
 sudo apt-get update && sudo apt-get upgrade -y
 
-# Install dependencies
-print_status "Installing system dependencies..."
-sudo apt-get install -y python3 python3-pip python3-venv git
+print_status "Installing required system dependencies..."
+# FIX: Added python3-venv to the package list
+sudo apt-get install -y \
+    python3-pip \
+    python3-venv \
+    python3-dev \
+    git \
+    build-essential \
+    logrotate
 
-# Enable SPI
+# 3. Hardware Interface Configuration
 print_hardened "Enabling SPI interface for reliable sensor communication..."
-sudo raspi-config nonint do_spi 0
-print_success "SPI interface enabled."
+# FIX: Robustly find the boot config file location
+BOOT_CONFIG="/boot/config.txt"
+if [ ! -f "$BOOT_CONFIG" ]; then
+    BOOT_CONFIG="/boot/firmware/config.txt"
+fi
 
-# GPIO permissions
-print_hardened "Setting up GPIO permissions..."
-sudo usermod -a -G gpio,spi "$USER"
-print_warning "A REBOOT or RE-LOGIN is required for GPIO/SPI permissions to apply."
+if [ ! -f "$BOOT_CONFIG" ]; then
+    print_error "Could not find boot config file at /boot/config.txt or /boot/firmware/config.txt. Exiting."
+    exit 1
+fi
 
-# Create project directory and venv
-print_status "Creating Python virtual environment..."
-python3 -m venv lightning_detector_env
-source lightning_detector_env/bin/activate
+if ! grep -q "^dtparam=spi=on" "$BOOT_CONFIG"; then
+    echo "dtparam=spi=on" | sudo tee -a "$BOOT_CONFIG" >/dev/null
+    REBOOT_REQUIRED=true
+    print_success "SPI enabled in boot configuration. A reboot will be required."
+else
+    print_status "SPI interface is already enabled in $BOOT_CONFIG."
+fi
+
+# FIX: Check if SPI devices are actually available after enabling
+if ! ls /dev/spidev* >/dev/null 2>&1; then
+    # If devices are not present, a reboot is definitely needed
+    REBOOT_REQUIRED=true
+fi
+
+print_hardened "Setting up GPIO permissions for user '$USER'..."
+sudo usermod -a -G gpio,spi,i2c "$USER"
+
+# 4. Application Setup
+print_status "Setting up Python virtual environment..."
+if [ ! -d "$VENV_NAME" ]; then
+    python3 -m venv "$VENV_NAME"
+    print_success "Virtual environment created."
+else
+    print_status "Virtual environment already exists."
+fi
+
+source "$VENV_NAME/bin/activate"
 pip install --upgrade pip
-pip install Flask RPi.GPIO spidev requests
 
-# Create config.ini v2.0
+print_status "Installing Python dependencies from requirements.txt..."
+pip install -r requirements.txt
+deactivate
+
+# 5. Configuration File
+print_status "Checking for configuration file..."
 if [ ! -f "config.ini" ]; then
-    print_hardened "Creating new config.ini for v2.0..."
-    cat > config.ini << EOF
+    print_hardened "Creating default production config.ini..."
+    cp config.ini.example config.ini 2>/dev/null || cat >config.ini <<'EOF'
 [SYSTEM]
 debug = false
 
@@ -73,7 +129,6 @@ irq_pin = 2
 indoor = false
 sensitivity = medium
 auto_start = true
-polling_interval = 1.0
 
 [NOISE_HANDLING]
 enabled = true
@@ -83,7 +138,7 @@ raised_noise_floor_level = 5
 revert_delay_minutes = 10
 
 [SLACK]
-bot_token =
+bot_token = xoxb-YOUR-BOT-TOKEN-HERE
 channel = #alerts
 enabled = true
 
@@ -98,74 +153,99 @@ level = INFO
 max_file_size = 10
 backup_count = 5
 EOF
-    print_success "config.ini v2.0 created."
+    print_success "Default config.ini created. Please edit it with your settings."
 else
-    print_warning "Existing config.ini found. Please review and add 'indoor = false' to the [SENSOR] section."
+    print_warning "Existing config.ini found. Please ensure it is configured correctly."
 fi
 
-# Systemd service setup
+# 6. Log Rotation
+print_hardened "Setting up log rotation for lightning_detector.log..."
+LOGROTATE_CONF="/etc/logrotate.d/$SERVICE_NAME"
+sudo tee "$LOGROTATE_CONF" >/dev/null <<EOF
+$PROJECT_DIR/lightning_detector.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 644 $USER $USER
+}
+EOF
+print_success "Log rotation configured."
+
+# 7. Systemd Service Setup
 SERVICE_REPLY=""
 echo
-read -p "🚀 Set up hardened systemd service (auto-start on boot)? (y/n): " -n 1 -r SERVICE_REPLY
+read -p "🚀 Set up systemd service to auto-start on boot? (y/n): " -n 1 -r SERVICE_REPLY
 echo
 if [[ $SERVICE_REPLY =~ ^[Yy]$ ]]; then
-    print_hardened "Creating systemd service for v2.0..."
-    sudo tee /etc/systemd/system/lightning-detector.service > /dev/null <<EOF
+    print_hardened "Creating production-ready systemd service..."
+    SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
+
+    # FIX: Use a more robust Group setting and improved network dependencies
+    sudo tee "$SERVICE_FILE" >/dev/null <<EOF
 [Unit]
-Description=Lightning Detector Service v2.0 (Event-Driven)
-After=network.target
+Description=Lightning Detector Service v2.2-Production
+Documentation=https://github.com/your-repo/your-project
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=$USER
-WorkingDirectory=$(pwd)
-ExecStart=$(pwd)/lightning_detector_env/bin/python lightning.py
-Restart=on-failure
+Group=$USER
+WorkingDirectory=$PROJECT_DIR
+Environment="PYTHONUNBUFFERED=1"
+
+# Main execution command
+ExecStart=$PROJECT_DIR/$VENV_NAME/bin/python3 lightning.py
+
+# --- Hardening and Reliability ---
+# Automatically restart the service if it fails
+Restart=always
+# Wait 10 seconds before restarting to prevent fast crash loops
 RestartSec=10
+# Give the application 30 seconds to shut down gracefully
+TimeoutStopSec=30
+# Send output to systemd journal
 StandardOutput=journal
 StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 EOF
+
+    print_status "Reloading systemd daemon and enabling the service..."
     sudo systemctl daemon-reload
-    sudo systemctl enable lightning-detector.service
-    print_success "Hardened service v2.0 created and enabled!"
+    sudo systemctl enable "$SERVICE_NAME.service"
+    print_success "$SERVICE_NAME service created and enabled."
+    print_status "You can manage the service with: sudo systemctl [start|stop|status] $SERVICE_NAME"
 fi
 
-# Create start.sh
-print_status "Creating startup script (start.sh)..."
-cat > start.sh << 'EOF'
-#!/bin/bash
-# Lightning Detector Hardened Startup Script v2.0
-echo "Starting Lightning Detector v2.0..."
-echo "Architecture: Event-Driven"
-cd "$(dirname "$0")"
-source lightning_detector_env/bin/activate
-python3 lightning.py
-EOF
-chmod +x start.sh
-
-IP_ADDRESS=$(hostname -I | awk '{print $1}')
-
-# Completion summary
+# --- Final Instructions ---
 echo
-print_success "Lightning Detector v2.0 setup complete!"
+echo -e "${CYAN}===========================================${NC}"
+print_success "Setup Complete!"
+echo -e "${CYAN}===========================================${NC}"
 echo
-echo "📋 Next Steps:"
-echo "┌─────────────────────────────────────────────────────────────────┐"
-echo "│ ⚠️  IMPORTANT: Please REBOOT now to apply all changes.          │"
-echo "│    sudo reboot                                                  │"
-echo "│                                                                 │"
-echo "│ ⚙️  Configuration v2.0:                                         │"
-echo "│    Edit config.ini to add your Slack bot token and set          │"
-echo "│    'indoor = true' if the sensor is used inside.                │"
-echo "│                                                                 │"
-echo "│ 🚀 Running Options (after reboot):                              │"
-echo "│    - Manually: ./start.sh                                       │"
-if [[ $SERVICE_REPLY =~ ^[Yy]$ ]]; then
-echo "│    - Service:  sudo systemctl start lightning-detector          │"
+
+print_warning "IMPORTANT: Please edit the 'config.ini' file, especially the Slack bot token."
+
+if [[ "$REBOOT_REQUIRED" = true ]]; then
+    print_error "A system reboot is REQUIRED to apply hardware interface changes and new group permissions."
+    read -p "Reboot now? (y/n): " -n 1 -r REBOOT_REPLY
+    echo
+    if [[ $REBOOT_REPLY =~ ^[Yy]$ ]]; then
+        print_status "Rebooting now..."
+        sudo reboot
+    else
+        print_warning "Please remember to reboot your system manually via 'sudo reboot'."
+    fi
+else
+    print_status "You can now start the service with: sudo systemctl start $SERVICE_NAME"
+    print_warning "A reboot or re-login is still recommended to apply new group permissions for '$USER'."
 fi
-echo "│                                                                 │"
-echo "│ 🌐 Web Interface: http://$IP_ADDRESS:5000                   │"
-echo "└─────────────────────────────────────────────────────────────────┘"
+
+echo
+
