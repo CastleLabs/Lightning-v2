@@ -15,7 +15,7 @@ using the AS3935 sensor chip. It features:
 - Production-grade reliability enhancements
 
 Author: Lightning Detector Project
-Version: 2.0-Production-Enhanced-Fixed
+Version: 2.0-Production-Enhanced
 """
 
 import configparser
@@ -76,37 +76,38 @@ CONFIG = configparser.ConfigParser()
 # Main monitoring state - thread-safe dictionary holding all shared state
 # This dictionary is protected by the 'lock' member for thread safety
 MONITORING_STATE = {
-    "lock": threading.Lock(),                  # Protects all state modifications
-    "stop_event": threading.Event(),           # Signals threads to stop
-    "events": deque(maxlen=100),               # Circular buffer of lightning events
-    "status": {                                # Current system status
-        'last_reading': None,                  # ISO timestamp of last sensor reading
-        'sensor_active': False,                # Is monitoring thread running?
-        'status_message': 'Not started',       # Human-readable status
-        'indoor_mode': False,                  # Indoor/outdoor mode from config
-        'noise_mode': 'Normal',                # Current noise mitigation: Normal/High/Critical
-        'sensor_healthy': True,                # Is sensor responding correctly?
-        'last_error': None                     # Last error message if any
+    "lock": threading.Lock(),                    # Protects all state modifications
+    "stop_event": threading.Event(),             # Signals threads to stop
+    "events": deque(maxlen=100),                 # Circular buffer of lightning events
+    "status": {                                  # Current system status
+        'last_reading': None,                    # ISO timestamp of last sensor reading
+        'sensor_active': False,                  # Is monitoring thread running?
+        'status_message': 'Not started',         # Human-readable status
+        'indoor_mode': False,                    # Indoor/outdoor mode from config
+        'noise_mode': 'Normal',                  # Current noise mitigation: Normal/High/Critical
+        'sensor_healthy': True,                  # Is sensor responding correctly?
+        'last_error': None                       # Last error message if any
     },
-    "thread": None,                            # Reference to monitoring thread
-    "noise_events": deque(maxlen=50),          # Buffer for counting disturber events
-    "noise_revert_timer": None,                # Timer to revert noise floor changes
-    "watchdog_thread": None,                   # Thread monitoring the monitoring thread
-    "last_interrupt_time": 0,                  # For interrupt storm detection
-    "interrupt_count": 0,                      # Count interrupts for storm detection
-    "interrupt_storm_detected": False          # Flag for interrupt storm condition
+    "thread": None,                              # Reference to monitoring thread
+    "noise_events": deque(maxlen=50),            # Buffer for counting disturber events
+    "noise_revert_timer": None,                  # Timer to revert noise floor changes
+    "watchdog_thread": None,                     # Thread monitoring the monitoring thread
+    "last_interrupt_time": 0,                    # For interrupt storm detection
+    "interrupt_count": 0,                        # Count interrupts for storm detection
+    "interrupt_storm_detected": False,           # Flag for interrupt storm condition
+    "gpio_mode": "interrupt"                     # Track if we're in interrupt or polling mode
 }
 
 # Alert state management - separate from monitoring state for clarity
 ALERT_STATE = {
-    "warning_timer": None,                     # Timer for warning zone all-clear
-    "critical_timer": None,                    # Timer for critical zone all-clear
-    "warning_active": False,                   # Is warning alert currently active?
-    "critical_active": False,                  # Is critical alert currently active?
-    "last_warning_strike": None,               # Timestamp of last warning zone strike
-    "last_critical_strike": None,              # Timestamp of last critical zone strike
-    "timer_lock": threading.Lock(),            # Protects timer operations
-    "active_timers": []                        # Track all active timers
+    "warning_timer": None,                       # Timer for warning zone all-clear
+    "critical_timer": None,                      # Timer for critical zone all-clear
+    "warning_active": False,                     # Is warning alert currently active?
+    "critical_active": False,                    # Is critical alert currently active?
+    "last_warning_strike": None,                 # Timestamp of last warning zone strike
+    "last_critical_strike": None,                # Timestamp of last critical zone strike
+    "timer_lock": threading.Lock(),              # Protects timer operations
+    "active_timers": []                          # Track all active timers
 }
 
 # Slack notification queue for non-blocking alerts
@@ -125,18 +126,6 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max request size
 
 # Set request timeout
 WSGIRequestHandler.timeout = 30
-
-# --- Helper Functions for GPIO ---
-def cleanup_gpio_interrupt(pin):
-    """Safely cleanup a specific GPIO pin interrupt"""
-    try:
-        GPIO.remove_event_detect(pin)
-        app.logger.debug(f"Removed event detection from GPIO{pin}")
-    except Exception as e:
-        app.logger.debug(f"No event detection to remove from GPIO{pin}: {e}")
-    
-    # Small delay to ensure cleanup is complete
-    time.sleep(0.05)
 
 # --- AS3935 Sensor Driver Class ---
 class AS3935LightningDetector:
@@ -163,7 +152,7 @@ class AS3935LightningDetector:
     INT_D = 0x04             # Disturber detected
     INT_L = 0x08             # Lightning detected
 
-    def __init__(self, spi_bus=0, spi_device=0, irq_pin=2):
+    def __init__(self, spi_bus=0, spi_device=0, irq_pin=22):
         """
         Initialize the AS3935 sensor
 
@@ -182,31 +171,12 @@ class AS3935LightningDetector:
             self.spi = spidev.SpiDev()
             self.spi.open(spi_bus, spi_device)
             self.spi.max_speed_hz = 2000000  # 2MHz max per datasheet
-            self.spi.mode = 0b01             # CPOL=0, CPHA=1
+            self.spi.mode = 0b01              # CPOL=0, CPHA=1
 
-            # Configure GPIO for interrupt pin with proper cleanup
+            # Configure GPIO for interrupt pin
             GPIO.setwarnings(False)
-            
-            # Ensure we're in BCM mode
-            current_mode = GPIO.getmode()
-            if current_mode is None:
-                GPIO.setmode(GPIO.BCM)
-            elif current_mode != GPIO.BCM:
-                app.logger.warning(f"GPIO already in {current_mode} mode, switching to BCM")
-                GPIO.setmode(GPIO.BCM)
-            
-            # Clean up any existing event detection on this pin
-            cleanup_gpio_interrupt(self.irq_pin)
-            
-            # Setup the pin
+            GPIO.setmode(GPIO.BCM)
             GPIO.setup(self.irq_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-            
-            # Let the pin settle
-            time.sleep(0.1)
-            
-            # Verify pin is readable
-            initial_state = GPIO.input(self.irq_pin)
-            app.logger.debug(f"IRQ pin {self.irq_pin} initial state: {initial_state}")
 
             # Power up and configure the sensor
             self.power_up()
@@ -269,12 +239,7 @@ class AS3935LightningDetector:
     def power_up(self):
         """
         Initialize and calibrate the sensor according to datasheet specifications
-
-        This performs the complete initialization sequence including:
-        - Power up from power-down mode
-        - Oscillator calibration
-        - Setting indoor/outdoor mode
-        - Configuring sensitivity settings
+        FIXED VERSION - Ensures interrupts are cleared during initialization
         """
         try:
             # Step 1: Power up sequence (PWD bit = 0)
@@ -286,14 +251,26 @@ class AS3935LightningDetector:
             if test_read != 0x96:
                 raise Exception(f"Sensor not responding correctly. Expected 0x96, got {test_read:#04x}")
 
-            # Step 3: Calibrate internal oscillators
+            # Step 3: Clear any pending interrupts before calibration
+            # This is critical - the sensor may have interrupts pending from before power cycle
+            for _ in range(3):
+                _ = self.get_interrupt_reason()
+                time.sleep(0.01)
+            
+            # Force clear interrupts by toggling the INT bit
+            self._write_register(0x00, test_read | 0x40)
+            time.sleep(0.01)
+            self._write_register(0x00, test_read & ~0x40)
+            time.sleep(0.01)
+
+            # Step 4: Calibrate internal oscillators
             self._write_register(self.REG_LCO_FDIV, 0b10010111)
             self._write_register(self.REG_DISP_LCO, 0x80)
             time.sleep(0.002)
             self._write_register(self.REG_DISP_LCO, 0x00)
             time.sleep(0.002)
 
-            # Step 4: Configure for indoor/outdoor mode
+            # Step 5: Configure for indoor/outdoor mode
             is_indoor = get_config_boolean('SENSOR', 'indoor', False)
             sensitivity = CONFIG.get('SENSOR', 'sensitivity', fallback='medium')
 
@@ -326,6 +303,12 @@ class AS3935LightningDetector:
             current_srej = self._read_register(self.REG_SREJ)
             new_srej = (settings['srej'] << 4) | (current_srej & 0x0F)
             self._write_register(self.REG_SREJ, new_srej)
+            
+            # Step 6: Final interrupt clear after all configuration
+            time.sleep(0.1)
+            for _ in range(3):
+                _ = self.get_interrupt_reason()
+                time.sleep(0.01)
 
             # Update global status
             with MONITORING_STATE['lock']:
@@ -431,9 +414,6 @@ class AS3935LightningDetector:
 
             if self.is_initialized and self.irq_pin is not None:
                 try:
-                    # Clean up interrupt detection first
-                    cleanup_gpio_interrupt(self.irq_pin)
-                    
                     # Only reset this specific pin, not all GPIO
                     if GPIO.gpio_function(self.irq_pin) == GPIO.IN:
                         GPIO.setup(self.irq_pin, GPIO.IN)
@@ -509,7 +489,7 @@ def validate_config():
         errors.append("SPI bus must be 0 or 1")
 
     # Validate GPIO pin
-    irq_pin = get_config_int('SENSOR', 'irq_pin', 2)
+    irq_pin = get_config_int('SENSOR', 'irq_pin', 22)
     if irq_pin < 0 or irq_pin > 27:  # BCM pin range
         errors.append("IRQ pin must be between 0 and 27")
 
@@ -539,6 +519,138 @@ def validate_config():
 
     return len(errors) == 0
 
+# --- Enhanced GPIO Setup Function ---
+def setup_gpio_interrupt_with_fallback(irq_pin, max_retries=3):
+    """
+    Setup GPIO interrupt with automatic fallback to polling if needed
+    FIXED VERSION - Properly clears sensor interrupts before GPIO setup
+    """
+    # First ensure sensor is properly initialized and interrupts are cleared
+    with SENSOR_INIT_LOCK:
+        if not sensor or not sensor.is_initialized:
+            app.logger.error("Cannot setup GPIO - sensor not initialized")
+            return False, 'polling'
+    
+    # Clear ALL pending interrupts from the sensor
+    app.logger.info("Clearing sensor interrupts before GPIO setup...")
+    try:
+        with SENSOR_INIT_LOCK:
+            # Read interrupt register multiple times to ensure it's cleared
+            for _ in range(5):
+                int_reason = sensor.get_interrupt_reason()
+                if int_reason != 0:
+                    app.logger.info(f"Cleared interrupt: 0x{int_reason:02x}")
+                
+                # Also read the data registers to clear any pending data
+                if int_reason == sensor.INT_L:
+                    _ = sensor.get_lightning_distance()
+                    _ = sensor.get_lightning_energy()
+                
+                time.sleep(0.01)
+            
+            # Force a register write to clear interrupt flags
+            # Writing to register 0x00 with bit 6 set clears all interrupts
+            sensor._write_register(0x00, sensor._read_register(0x00) | 0x40)
+            time.sleep(0.01)
+            sensor._write_register(0x00, sensor._read_register(0x00) & ~0x40)
+            time.sleep(0.1)
+            
+    except Exception as e:
+        app.logger.error(f"Failed to clear sensor interrupts: {e}")
+    
+    # Now check GPIO state
+    try:
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(irq_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        
+        # Wait for pin to stabilize
+        stable_count = 0
+        for i in range(50):  # Check for up to 500ms
+            if GPIO.input(irq_pin) == 1:
+                stable_count += 1
+                if stable_count >= 5:  # Pin has been HIGH for 50ms
+                    app.logger.info(f"GPIO {irq_pin} is stable HIGH")
+                    break
+            else:
+                stable_count = 0
+            time.sleep(0.01)
+        else:
+            app.logger.warning(f"GPIO {irq_pin} did not stabilize to HIGH")
+            # Try one more aggressive clear
+            with SENSOR_INIT_LOCK:
+                # Reset the sensor's interrupt logic
+                current_val = sensor._read_register(0x00)
+                sensor._write_register(0x00, current_val | 0x01)  # Set PWD bit
+                time.sleep(0.1)
+                sensor._write_register(0x00, current_val & ~0x01)  # Clear PWD bit
+                time.sleep(0.1)
+                
+    except Exception as e:
+        app.logger.error(f"GPIO setup error: {e}")
+    
+    # Try to set up interrupt detection
+    for attempt in range(max_retries):
+        try:
+            # Remove any existing detection
+            try:
+                GPIO.remove_event_detect(irq_pin)
+            except:
+                pass
+            
+            time.sleep(0.1)
+            
+            # Ensure pin is still configured correctly
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setup(irq_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            
+            # Check pin state before adding detection
+            pin_state = GPIO.input(irq_pin)
+            app.logger.info(f"GPIO {irq_pin} state before edge detection: {pin_state}")
+            
+            if pin_state == 0:
+                app.logger.warning("Pin is still LOW, cannot add edge detection")
+                raise Exception("Pin stuck LOW")
+            
+            # Add event detection with a wrapper to catch exceptions
+            def safe_interrupt_handler(channel):
+                try:
+                    handle_sensor_interrupt(channel)
+                except Exception as e:
+                    app.logger.error(f"Exception in interrupt handler: {e}")
+            
+            GPIO.add_event_detect(
+                irq_pin,
+                GPIO.FALLING,
+                callback=safe_interrupt_handler,
+                bouncetime=50  # Increased from 20ms
+            )
+            
+            app.logger.info(f"GPIO interrupt configured successfully on pin {irq_pin}")
+            
+            with MONITORING_STATE['lock']:
+                MONITORING_STATE['gpio_mode'] = 'interrupt'
+                MONITORING_STATE['status']['status_message'] = "Monitoring (Event-Driven)"
+            
+            return True, 'interrupt'
+            
+        except Exception as e:
+            app.logger.warning(f"GPIO interrupt setup attempt {attempt + 1} failed: {e}")
+            
+            if attempt < max_retries - 1:
+                time.sleep(1)
+            else:
+                # Final attempt failed, switch to polling mode
+                app.logger.warning("GPIO interrupt setup failed. Switching to polling mode.")
+                
+                with MONITORING_STATE['lock']:
+                    MONITORING_STATE['gpio_mode'] = 'polling'
+                    MONITORING_STATE['status']['status_message'] = "Monitoring (Polling Mode)"
+                    MONITORING_STATE['status']['last_error'] = f"GPIO interrupt failed: {str(e)}"
+                
+                return False, 'polling'
+    
+    return False, 'polling'
+
 # --- Sensor Initialization and Management ---
 def initialize_sensor_with_retry(max_retries=5, retry_delay=5):
     """
@@ -565,18 +677,22 @@ def initialize_sensor_with_retry(max_retries=5, retry_delay=5):
                 sensor = AS3935LightningDetector(
                     spi_bus=get_config_int('SENSOR', 'spi_bus', 0),
                     spi_device=get_config_int('SENSOR', 'spi_device', 0),
-                    irq_pin=get_config_int('SENSOR', 'irq_pin', 2)
+                    irq_pin=get_config_int('SENSOR', 'irq_pin', 22)
                 )
 
                 # Verify sensor is responsive by reading a register
                 test_value = sensor._read_register(0x00)
                 app.logger.info(f"Sensor initialized successfully (test read: {test_value:#04x})")
+                
+                # Clear any pending interrupts
+                int_status = sensor.get_interrupt_reason()
+                if int_status != 0:
+                    app.logger.info(f"Cleared pending interrupt on startup: 0x{int_status:02x}")
 
                 # Update global status
                 with MONITORING_STATE['lock']:
                     MONITORING_STATE['status']['sensor_active'] = True
                     MONITORING_STATE['status']['sensor_healthy'] = True
-                    MONITORING_STATE['status']['status_message'] = "Monitoring (Event-Driven)"
                     MONITORING_STATE['status']['last_error'] = None
 
                 return True
@@ -655,6 +771,7 @@ def perform_sensor_health_check():
 def handle_sensor_interrupt(channel):
     """
     GPIO interrupt callback function with storm detection
+    FIXED VERSION - More robust interrupt handling
 
     This is called on the falling edge of the IRQ pin when the sensor
     detects lightning, noise, or disturbers. It reads the interrupt
@@ -663,9 +780,6 @@ def handle_sensor_interrupt(channel):
     Args:
         channel: GPIO channel that triggered the interrupt
     """
-    # Debug: Log that interrupt was received
-    app.logger.debug(f"Interrupt received on GPIO{channel}")
-    
     # Quick check before acquiring locks
     if MONITORING_STATE['stop_event'].is_set():
         return
@@ -674,42 +788,16 @@ def handle_sensor_interrupt(channel):
     current_time = time.time()
 
     with MONITORING_STATE['lock']:
-        # Check for interrupt storm (>100 interrupts/second)
-        if current_time - MONITORING_STATE['last_interrupt_time'] < 0.01:
-            MONITORING_STATE['interrupt_count'] += 1
-            if MONITORING_STATE['interrupt_count'] > 100:
-                if not MONITORING_STATE['interrupt_storm_detected']:
-                    app.logger.critical("Interrupt storm detected! Disabling interrupts temporarily")
-                    MONITORING_STATE['interrupt_storm_detected'] = True
-                    # Temporarily disable interrupt
-                    GPIO.remove_event_detect(channel)
-                    # Re-enable after 5 seconds
-                    def re_enable_interrupt():
-                        try:
-                            GPIO.add_event_detect(
-                                channel, GPIO.FALLING,
-                                callback=handle_sensor_interrupt,
-                                bouncetime=20
-                            )
-                            with MONITORING_STATE['lock']:
-                                MONITORING_STATE['interrupt_storm_detected'] = False
-                                MONITORING_STATE['interrupt_count'] = 0
-                            app.logger.info("Interrupts re-enabled after storm")
-                        except Exception as e:
-                            app.logger.error(f"Failed to re-enable interrupts: {e}")
-
-                    timer = threading.Timer(5.0, re_enable_interrupt)
-                    timer.daemon = True
-                    timer.start()
-                return
-        else:
-            MONITORING_STATE['interrupt_count'] = 0
-            MONITORING_STATE['interrupt_storm_detected'] = False
-
+        # Simple rate limiting instead of complex storm detection
+        if current_time - MONITORING_STATE['last_interrupt_time'] < 0.02:  # 50Hz max
+            return
         MONITORING_STATE['last_interrupt_time'] = current_time
 
+    # Longer debounce delay
+    time.sleep(0.005)
+
     # Use a timeout to prevent deadlocks
-    acquired = SENSOR_INIT_LOCK.acquire(timeout=0.5)
+    acquired = SENSOR_INIT_LOCK.acquire(timeout=1.0)  # Increased timeout
     if not acquired:
         app.logger.warning("Could not acquire sensor lock in interrupt handler")
         return
@@ -719,23 +807,28 @@ def handle_sensor_interrupt(channel):
         if not sensor or not sensor.is_initialized:
             return
 
-        # Read interrupt reason with retry logic
+        # Read interrupt reason with better error handling
         interrupt_reason = None
         for attempt in range(3):
             try:
                 interrupt_reason = sensor.get_interrupt_reason()
-                break
-            except IOError:
+                if interrupt_reason != 0:  # Only break if we got a valid interrupt
+                    break
+            except IOError as e:
                 if attempt == 2:
-                    raise
-                time.sleep(0.001)
+                    app.logger.error(f"Failed to read interrupt reason: {e}")
+                    return
+                time.sleep(0.002)
 
-        if interrupt_reason is None:
+        if interrupt_reason is None or interrupt_reason == 0:
             return
 
         # Update last reading timestamp
         with MONITORING_STATE['lock']:
             MONITORING_STATE['status']['last_reading'] = datetime.now().isoformat()
+
+        # Log the interrupt for debugging
+        app.logger.debug(f"Processing interrupt 0x{interrupt_reason:02x}")
 
         # Dispatch to appropriate handler based on interrupt type
         if interrupt_reason == sensor.INT_L:
@@ -748,7 +841,7 @@ def handle_sensor_interrupt(channel):
             app.logger.debug(f"Unknown interrupt reason: {interrupt_reason:#04x}")
 
     except Exception as e:
-        app.logger.error(f"Error in interrupt handler: {e}")
+        app.logger.error(f"Error in interrupt handler: {e}", exc_info=True)
         with MONITORING_STATE['lock']:
             MONITORING_STATE['status']['sensor_healthy'] = False
             MONITORING_STATE['status']['last_error'] = f"Interrupt error: {str(e)}"
@@ -815,6 +908,62 @@ def handle_lightning_event():
         app.logger.error(f"Error handling lightning event: {e}")
         raise
 
+# --- Polling Mode Implementation ---
+def run_polling_mode():
+    """
+    Alternative polling mode for when GPIO interrupts fail
+    
+    This function polls the IRQ pin for state changes instead of using interrupts.
+    Less efficient but more reliable on some systems.
+    """
+    app.logger.info("Starting polling mode for lightning detection")
+    
+    last_irq_state = 1  # Assume HIGH initially
+    consecutive_errors = 0
+    max_consecutive_errors = 10
+    
+    while not MONITORING_STATE['stop_event'].is_set():
+        try:
+            # Read current IRQ pin state
+            current_state = GPIO.input(sensor.irq_pin)
+            
+            # Detect falling edge (HIGH to LOW transition)
+            if last_irq_state == 1 and current_state == 0:
+                app.logger.debug("Interrupt detected via polling (falling edge)")
+                
+                # Process the interrupt
+                handle_sensor_interrupt(sensor.irq_pin)
+                
+                # Wait for pin to go high again before looking for next interrupt
+                wait_count = 0
+                while GPIO.input(sensor.irq_pin) == 0 and wait_count < 100:
+                    time.sleep(0.01)
+                    wait_count += 1
+                
+                if wait_count >= 100:
+                    app.logger.warning("IRQ pin stuck LOW for >1 second")
+            
+            last_irq_state = current_state
+            consecutive_errors = 0  # Reset error counter on success
+            
+            # Small delay to prevent excessive CPU usage
+            time.sleep(0.005)  # 5ms polling interval
+            
+        except Exception as e:
+            consecutive_errors += 1
+            app.logger.error(f"Polling mode error ({consecutive_errors}/{max_consecutive_errors}): {e}")
+            
+            if consecutive_errors >= max_consecutive_errors:
+                app.logger.critical("Too many consecutive errors in polling mode")
+                with MONITORING_STATE['lock']:
+                    MONITORING_STATE['status']['sensor_healthy'] = False
+                    MONITORING_STATE['status']['last_error'] = "Polling mode failure"
+                break
+            
+            time.sleep(1)  # Back off on error
+    
+    app.logger.info("Polling mode stopped")
+
 # --- Alert System Functions ---
 def check_alert_conditions(distance, energy):
     """
@@ -870,7 +1019,7 @@ def check_alert_conditions(distance, energy):
             # Reset or start all-clear timer
             schedule_all_clear_message(AlertLevel.WARNING)
 
-        return {"send_alert": should_send_alert, "level": alert_level}
+    return {"send_alert": should_send_alert, "level": alert_level}
 
 def schedule_all_clear_message(alert_level):
     """
@@ -1139,7 +1288,7 @@ def _send_slack_notification_internal(message, distance=None, energy=None, alert
             "elements": [{
                 "type": "mrkdwn",
                 "text": f":information_source: No strikes in {previous_urgency.lower()} zone for "
-                        f"{get_config_int('ALERTS', 'all_clear_timer', 15)} min."
+                       f"{get_config_int('ALERTS', 'all_clear_timer', 15)} min."
             }]
         })
     else:
@@ -1305,81 +1454,22 @@ def lightning_monitoring():
     """
     global sensor
 
-    app.logger.info("Starting lightning monitoring thread v2.0-Production-Enhanced-Fixed")
+    app.logger.info("Starting lightning monitoring thread v2.0-Production-Enhanced")
 
     # Initialize sensor with retry logic
     if not initialize_sensor_with_retry():
         app.logger.critical("Failed to initialize sensor after all retries")
         return
 
-    # Setup GPIO interrupt detection with enhanced error handling
-    interrupt_configured = False
-    setup_attempts = 0
-    max_setup_attempts = 5
+    # Setup GPIO interrupt detection with fallback to polling
+    interrupt_success, gpio_mode = setup_gpio_interrupt_with_fallback(sensor.irq_pin)
     
-    while not interrupt_configured and setup_attempts < max_setup_attempts:
-        setup_attempts += 1
-        
-        try:
-            # Ensure clean state
-            cleanup_gpio_interrupt(sensor.irq_pin)
-            
-            # Verify GPIO mode
-            if GPIO.getmode() != GPIO.BCM:
-                GPIO.setmode(GPIO.BCM)
-                app.logger.debug("Reset GPIO mode to BCM")
-            
-            # Re-setup the pin (in case it was cleaned up)
-            GPIO.setup(sensor.irq_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-            time.sleep(0.1)
-            
-            # Add event detection
-            GPIO.add_event_detect(
-                sensor.irq_pin,
-                GPIO.FALLING,
-                callback=handle_sensor_interrupt,
-                bouncetime=20  # 20ms debounce
-            )
-            
-            # Verify it was added successfully
-            time.sleep(0.1)
-            pin_state = GPIO.input(sensor.irq_pin)
-            
-            interrupt_configured = True
-            app.logger.info(f"GPIO interrupt configured successfully on attempt {setup_attempts} (pin state: {pin_state})")
-            
-        except RuntimeError as e:
-            if "conflicting edge" in str(e):
-                app.logger.warning(f"Conflicting edge detection on attempt {setup_attempts}, cleaning up...")
-                try:
-                    GPIO.cleanup(sensor.irq_pin)
-                    time.sleep(0.5)
-                except:
-                    pass
-            else:
-                app.logger.error(f"RuntimeError on attempt {setup_attempts}: {e}")
-                
-        except Exception as e:
-            app.logger.error(f"Failed to setup GPIO interrupt on attempt {setup_attempts}: {e}")
-        
-        if not interrupt_configured and setup_attempts < max_setup_attempts:
-            wait_time = min(2 ** (setup_attempts - 1), 10)  # Exponential backoff, max 10s
-            app.logger.info(f"Waiting {wait_time}s before retry...")
-            
-            # Interruptible wait
-            for _ in range(int(wait_time * 10)):
-                if MONITORING_STATE['stop_event'].is_set():
-                    return
-                time.sleep(0.1)
-    
-    if not interrupt_configured:
-        app.logger.error(f"Failed to setup GPIO interrupt after {max_setup_attempts} attempts")
-        with MONITORING_STATE['lock']:
-            MONITORING_STATE['status']['sensor_healthy'] = False
-            MONITORING_STATE['status']['last_error'] = "GPIO interrupt setup failed"
+    if gpio_mode == 'polling':
+        # Run in polling mode
+        run_polling_mode()
         return
 
-    # Main monitoring loop
+    # Main monitoring loop (interrupt mode)
     last_health_check = time.time()
     health_check_interval = 300  # 5 minutes
     consecutive_failures = 0
@@ -1405,7 +1495,7 @@ def lightning_monitoring():
                         app.logger.critical(f"Sensor failed {max_consecutive_failures} consecutive health checks")
 
                         # Remove old interrupt handler
-                        if interrupt_configured:
+                        if interrupt_success:
                             try:
                                 GPIO.remove_event_detect(sensor.irq_pin)
                             except:
@@ -1416,18 +1506,12 @@ def lightning_monitoring():
                             consecutive_failures = 0
 
                             # Re-setup interrupt
-                            try:
-                                GPIO.add_event_detect(
-                                    sensor.irq_pin,
-                                    GPIO.FALLING,
-                                    callback=handle_sensor_interrupt,
-                                    bouncetime=20
-                                )
-                                interrupt_configured = True
-                                app.logger.info("Sensor recovered and interrupt re-configured")
-                            except Exception as e:
-                                app.logger.error(f"Failed to re-setup interrupt: {e}")
-                                break
+                            interrupt_success, gpio_mode = setup_gpio_interrupt_with_fallback(sensor.irq_pin)
+                            
+                            if gpio_mode == 'polling':
+                                # Switch to polling mode
+                                run_polling_mode()
+                                return
                         else:
                             app.logger.critical("Failed to recover sensor")
                             break
@@ -1447,7 +1531,7 @@ def lightning_monitoring():
         app.logger.info("Cleaning up monitoring thread")
 
         # Remove interrupt detection first (before any GPIO operations)
-        if interrupt_configured:
+        if interrupt_success:
             try:
                 GPIO.remove_event_detect(sensor.irq_pin)
                 app.logger.info("GPIO interrupt removed")
@@ -1522,478 +1606,3 @@ def monitoring_watchdog():
             else:
                 # Thread is running normally
                 consecutive_failures = 0
-
-# --- Flask Web Routes ---
-@app.route('/')
-def index():
-    """Main dashboard page"""
-    # Get current state with thread safety
-    with MONITORING_STATE['lock']:
-        events = list(MONITORING_STATE['events'])
-        status = MONITORING_STATE['status'].copy()
-        total_events = len(events)
-
-    with ALERT_STATE["timer_lock"]:
-        alert_status = {
-            'warning_active': ALERT_STATE["warning_active"],
-            'critical_active': ALERT_STATE["critical_active"],
-            'last_warning_strike': ALERT_STATE["last_warning_strike"].strftime('%H:%M:%S')
-                if ALERT_STATE["last_warning_strike"] else None,
-            'last_critical_strike': ALERT_STATE["last_critical_strike"].strftime('%H:%M:%S')
-                if ALERT_STATE["last_critical_strike"] else None
-        }
-
-    # Pre-format event data for template
-    for event in events:
-        if 'timestamp' in event:
-            try:
-                event['timestamp'] = datetime.fromisoformat(event['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
-            except:
-                event['timestamp'] = 'Unknown'
-
-        # Energy is already formatted in the event
-
-    # Format last reading timestamp
-    if status.get('last_reading'):
-        try:
-            status['last_reading'] = datetime.fromisoformat(status['last_reading']).strftime('%Y-%m-%d %H:%M:%S')
-        except:
-            status['last_reading'] = 'Unknown'
-
-    return render_template('index.html',
-        lightning_events=events,
-        sensor_status=status,
-        alert_state=alert_status,
-        config=CONFIG,
-        debug_mode=get_config_boolean('SYSTEM', 'debug', False),
-        total_event_count=total_events,
-        events_truncated=(total_events >= 100)
-    )
-
-@app.route('/api/status')
-def api_status():
-    """JSON API endpoint for system status"""
-    with MONITORING_STATE['lock']:
-        status = MONITORING_STATE['status'].copy()
-        thread_alive = MONITORING_STATE['thread'].is_alive() if MONITORING_STATE.get('thread') else False
-        event_count = len(MONITORING_STATE['events'])
-
-    with ALERT_STATE["timer_lock"]:
-        alert_status = {
-            'warning_active': ALERT_STATE["warning_active"],
-            'critical_active': ALERT_STATE["critical_active"]
-        }
-
-    return jsonify({
-        **status,
-        'alert_state': alert_status,
-        'monitoring_thread_active': thread_alive,
-        'version': '2.0-Production-Enhanced-Fixed',
-        'event_count': event_count,
-        'config_valid': validate_config()
-    })
-
-@app.route('/health')
-def health_check():
-    """
-    Health check endpoint for monitoring system health
-
-    Returns HTTP 200 if healthy, 503 if degraded
-    """
-    health = {
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-        'version': '2.0-Production-Enhanced-Fixed',
-        'checks': {}
-    }
-
-    # Check sensor
-    with SENSOR_INIT_LOCK:
-        if sensor and sensor.is_initialized:
-            try:
-                # Try a register read
-                sensor._read_register(0x00)
-                health['checks']['sensor'] = 'ok'
-            except:
-                health['checks']['sensor'] = 'error'
-                health['status'] = 'degraded'
-        else:
-            health['checks']['sensor'] = 'not_initialized'
-            health['status'] = 'degraded'
-
-    # Check thread
-    with MONITORING_STATE['lock']:
-        thread = MONITORING_STATE.get('thread')
-        if thread and thread.is_alive():
-            health['checks']['monitoring_thread'] = 'running'
-        else:
-            health['checks']['monitoring_thread'] = 'stopped'
-            if get_config_boolean('SENSOR', 'auto_start', True):
-                health['status'] = 'degraded'
-
-    # Check configuration
-    health['checks']['config'] = 'valid' if validate_config() else 'invalid'
-    if health['checks']['config'] == 'invalid':
-        health['status'] = 'degraded'
-
-    # Check sensor health from status
-    with MONITORING_STATE['lock']:
-        if not MONITORING_STATE['status'].get('sensor_healthy', True):
-            health['checks']['sensor_health'] = 'unhealthy'
-            health['status'] = 'degraded'
-        else:
-            health['checks']['sensor_health'] = 'healthy'
-
-    return jsonify(health), 200 if health['status'] == 'healthy' else 503
-
-@app.route('/metrics')
-def metrics():
-    """Prometheus-compatible metrics endpoint for external monitoring"""
-    with MONITORING_STATE['lock']:
-        event_count = len(MONITORING_STATE['events'])
-        sensor_active = 1 if MONITORING_STATE['status']['sensor_active'] else 0
-        sensor_healthy = 1 if MONITORING_STATE['status']['sensor_healthy'] else 0
-        noise_level = {'Normal': 0, 'High': 1, 'Critical': 2}.get(
-            MONITORING_STATE['status']['noise_mode'], 0
-        )
-        interrupt_storm = 1 if MONITORING_STATE['interrupt_storm_detected'] else 0
-
-    with ALERT_STATE["timer_lock"]:
-        warning_active = 1 if ALERT_STATE["warning_active"] else 0
-        critical_active = 1 if ALERT_STATE["critical_active"] else 0
-        active_timer_count = len([t for t in ALERT_STATE["active_timers"] if t.is_alive()])
-
-    metrics_text = f"""# HELP lightning_detector_events_total Total lightning events detected
-# TYPE lightning_detector_events_total counter
-lightning_detector_events_total {event_count}
-
-# HELP lightning_detector_sensor_active Sensor monitoring status (1=active, 0=inactive)
-# TYPE lightning_detector_sensor_active gauge
-lightning_detector_sensor_active {sensor_active}
-
-# HELP lightning_detector_sensor_healthy Sensor health status (1=healthy, 0=unhealthy)
-# TYPE lightning_detector_sensor_healthy gauge
-lightning_detector_sensor_healthy {sensor_healthy}
-
-# HELP lightning_detector_noise_level Current noise mitigation level (0=Normal, 1=High, 2=Critical)
-# TYPE lightning_detector_noise_level gauge
-lightning_detector_noise_level {noise_level}
-
-# HELP lightning_detector_warning_active Warning alert active (1=active, 0=inactive)
-# TYPE lightning_detector_warning_active gauge
-lightning_detector_warning_active {warning_active}
-
-# HELP lightning_detector_critical_active Critical alert active (1=active, 0=inactive)
-# TYPE lightning_detector_critical_active gauge
-lightning_detector_critical_active {critical_active}
-
-# HELP lightning_detector_interrupt_storm Interrupt storm detected (1=yes, 0=no)
-# TYPE lightning_detector_interrupt_storm gauge
-lightning_detector_interrupt_storm {interrupt_storm}
-
-# HELP lightning_detector_active_timers Number of active alert timers
-# TYPE lightning_detector_active_timers gauge
-lightning_detector_active_timers {active_timer_count}
-"""
-    return Response(metrics_text, mimetype='text/plain')
-
-@app.route('/config')
-def config_page():
-    """Configuration page"""
-    return render_template('config.html', config=CONFIG)
-
-@app.route('/save_config', methods=['POST'])
-def save_config_route():
-    """Save configuration from web form"""
-    try:
-        # Define all sections and their checkbox options
-        checkbox_options = {
-            'SYSTEM': ['debug'],
-            'SENSOR': ['indoor', 'auto_start'],
-            'NOISE_HANDLING': ['enabled'],
-            'SLACK': ['enabled']
-        }
-
-        # First, set all known checkbox options to 'false'
-        for section, options in checkbox_options.items():
-            if not CONFIG.has_section(section):
-                CONFIG.add_section(section)
-            for option in options:
-                CONFIG.set(section, option, 'false')
-
-        # Now, update all values from the submitted form
-        for key, value in request.form.items():
-            if '_' in key:
-                section, option = key.split('_', 1)
-                if not CONFIG.has_section(section):
-                    CONFIG.add_section(section)
-                
-                # If the value is 'true' it's a checkbox, otherwise it's a text input
-                CONFIG.set(section, option, value)
-
-        # Save to file
-        with open('config.ini', 'w') as configfile:
-            CONFIG.write(configfile)
-
-        flash('Configuration saved successfully! A restart may be needed to apply all changes.', 'success')
-        app.logger.info("Configuration updated via web interface")
-
-    except Exception as e:
-        flash(f'Error saving configuration: {str(e)}', 'error')
-        app.logger.error(f"Configuration save error: {e}")
-
-    return redirect(url_for('config_page'))
-
-@app.route('/start_monitoring')
-def start_monitoring_route():
-    """Start the monitoring thread"""
-    with MONITORING_STATE['lock']:
-        if MONITORING_STATE.get('thread') and MONITORING_STATE['thread'].is_alive():
-            flash('Monitoring is already running', 'warning')
-        else:
-            # Clear stop event and start new thread
-            MONITORING_STATE['stop_event'].clear()
-            thread = threading.Thread(target=lightning_monitoring, daemon=True)
-            MONITORING_STATE['thread'] = thread
-            thread.start()
-            flash('Monitoring started successfully', 'success')
-            app.logger.info("Monitoring started via web interface")
-
-    return redirect(url_for('index'))
-
-@app.route('/stop_monitoring')
-def stop_monitoring_route():
-    """Stop the monitoring thread"""
-    with MONITORING_STATE['lock']:
-        if not MONITORING_STATE.get('thread') or not MONITORING_STATE['thread'].is_alive():
-            flash('Monitoring is not running', 'warning')
-        else:
-            # Signal thread to stop
-            MONITORING_STATE['stop_event'].set()
-            flash('Monitoring stop requested. Please wait...', 'info')
-            app.logger.info("Monitoring stop requested via web interface")
-
-    # Clean up alert timers
-    cleanup_alert_timers()
-
-    return redirect(url_for('index'))
-
-@app.route('/test_alerts')
-def test_alerts():
-    """Test alert functionality (debug mode only)"""
-    if not get_config_boolean('SYSTEM', 'debug', False):
-        flash('Test alerts only available in debug mode', 'error')
-        return redirect(url_for('index'))
-
-    alert_type = request.args.get('type', 'warning')
-
-    # Create fake event
-    if alert_type == 'critical':
-        distance = 5
-        alert_level = AlertLevel.CRITICAL
-        message = "🚨 TEST CRITICAL ALERT: This is a test of the critical alert system"
-    else:
-        distance = 20
-        alert_level = AlertLevel.WARNING
-        message = "⚠️ TEST WARNING ALERT: This is a test of the warning alert system"
-
-    # Send test notification
-    send_slack_notification(message, distance, 999999, alert_level)
-
-    # Update alert state for UI
-    with ALERT_STATE["timer_lock"]:
-        if alert_level == AlertLevel.CRITICAL:
-            ALERT_STATE["critical_active"] = True
-            ALERT_STATE["last_critical_strike"] = datetime.now()
-        else:
-            ALERT_STATE["warning_active"] = True
-            ALERT_STATE["last_warning_strike"] = datetime.now()
-
-    flash(f'Test {alert_type} alert sent', 'success')
-    return redirect(url_for('index'))
-
-@app.route('/reset_alerts')
-def reset_alerts():
-    """Reset all active alerts"""
-    cleanup_alert_timers()
-
-    # Clear alert state
-    with ALERT_STATE["timer_lock"]:
-        ALERT_STATE["warning_active"] = False
-        ALERT_STATE["critical_active"] = False
-        ALERT_STATE["last_warning_strike"] = None
-        ALERT_STATE["last_critical_strike"] = None
-
-    flash('All alerts have been reset', 'success')
-    app.logger.info("Alerts reset via web interface")
-
-    return redirect(url_for('index'))
-
-@app.route('/test_slack')
-def test_slack():
-    """Test Slack integration"""
-    if not get_config_boolean('SLACK', 'enabled', False):
-        flash('Slack notifications are disabled', 'warning')
-        return redirect(url_for('config_page'))
-
-    send_slack_notification(
-        "🧪 Test message from Lightning Detector v2.0",
-        alert_level=AlertLevel.WARNING
-    )
-
-    flash('Test message sent to Slack. Check your Slack channel.', 'info')
-    return redirect(url_for('config_page'))
-
-# --- Application Initialization ---
-def load_config():
-    """Load configuration from file"""
-    config_file = 'config.ini'
-    if os.path.exists(config_file):
-        CONFIG.read(config_file)
-        app.logger.info(f"Configuration loaded from {config_file}")
-
-        # Validate configuration
-        if not validate_config():
-            app.logger.warning("Configuration validation failed - check logs for details")
-    else:
-        app.logger.error(f"Configuration file {config_file} not found!")
-        raise FileNotFoundError(f"Configuration file {config_file} not found!")
-
-def initialize_logging():
-    """Configure application logging"""
-    log_level = CONFIG.get('LOGGING', 'level', fallback='INFO')
-    max_size = get_config_int('LOGGING', 'max_file_size', 10) * 1024 * 1024
-    backup_count = get_config_int('LOGGING', 'backup_count', 5)
-
-    # Create formatter
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-
-    # File handler with rotation
-    file_handler = RotatingFileHandler(
-        'lightning_detector.log',
-        maxBytes=max_size,
-        backupCount=backup_count
-    )
-    file_handler.setFormatter(formatter)
-
-    # Console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
-
-    # Configure Flask logger
-    app.logger.setLevel(getattr(logging, log_level))
-    app.logger.addHandler(file_handler)
-    app.logger.addHandler(console_handler)
-
-    # Add rate limiting filter
-    rate_filter = RateLimitFilter()
-    app.logger.addFilter(rate_filter)
-
-    # Reduce Werkzeug logging
-    logging.getLogger('werkzeug').setLevel(logging.WARNING)
-
-    app.logger.info("Logging initialized")
-
-def cleanup_resources():
-    """Cleanup function called on application shutdown"""
-    app.logger.info("Starting application cleanup...")
-
-    # Stop monitoring
-    with MONITORING_STATE['lock']:
-        MONITORING_STATE['stop_event'].set()
-
-    # Stop Slack worker
-    if SLACK_WORKER_THREAD and SLACK_WORKER_THREAD.is_alive():
-        SLACK_QUEUE.put(None)  # Shutdown signal
-        SLACK_WORKER_THREAD.join(timeout=5)
-
-    # Wait for monitoring thread to stop
-    with MONITORING_STATE['lock']:
-        thread = MONITORING_STATE.get('thread')
-        if thread and thread.is_alive():
-            thread.join(timeout=10)
-
-    # Wait for watchdog to stop
-    with MONITORING_STATE['lock']:
-        watchdog = MONITORING_STATE.get('watchdog_thread')
-        if watchdog and watchdog.is_alive():
-            watchdog.join(timeout=5)
-
-    # Clean up alert timers
-    cleanup_alert_timers()
-
-    # Clean up sensor
-    global sensor
-    if sensor:
-        try:
-            sensor.cleanup()
-        except:
-            pass
-
-    # Final GPIO cleanup
-    try:
-        GPIO.cleanup()
-    except:
-        pass
-
-    app.logger.info("Application cleanup complete")
-
-# Register cleanup function
-atexit.register(cleanup_resources)
-
-# --- Main Application Entry Point ---
-if __name__ == '__main__':
-    try:
-        # Initialize logging first
-        initialize_logging()
-
-        app.logger.info("="*60)
-        app.logger.info("Lightning Detector v2.0-Production-Enhanced-Fixed Starting")
-        app.logger.info("="*60)
-
-        # Load configuration
-        load_config()
-
-        # Start Slack worker thread
-        SLACK_WORKER_THREAD = threading.Thread(target=slack_worker, daemon=True)
-        SLACK_WORKER_THREAD.start()
-        app.logger.info("Slack notification worker started")
-
-        # Auto-start monitoring if configured
-        if get_config_boolean('SENSOR', 'auto_start', True):
-            app.logger.info("Auto-starting monitoring...")
-            with MONITORING_STATE['lock']:
-                MONITORING_STATE['stop_event'].clear()
-                thread = threading.Thread(target=lightning_monitoring, daemon=True)
-                MONITORING_STATE['thread'] = thread
-                thread.start()
-
-            # Start watchdog
-            time.sleep(2)  # Give monitoring thread time to start
-            watchdog = threading.Thread(target=monitoring_watchdog, daemon=True)
-            MONITORING_STATE['watchdog_thread'] = watchdog
-            watchdog.start()
-            app.logger.info("Watchdog thread started")
-
-        # Determine host and port
-        debug_mode = get_config_boolean('SYSTEM', 'debug', False)
-        host = '0.0.0.0'  # Listen on all interfaces
-        port = 5000
-
-        app.logger.info(f"Starting web server on {host}:{port} (debug={debug_mode})")
-
-        # Run Flask app
-        app.run(host=host, port=port, debug=debug_mode, threaded=True)
-
-    except KeyboardInterrupt:
-        app.logger.info("Keyboard interrupt received")
-    except Exception as e:
-        if 'app.logger' in locals():
-            app.logger.critical(f"Fatal error: {e}", exc_info=True)
-        else:
-            print(f"Fatal error: {e}")
-    finally:
-        cleanup_resources()
